@@ -59,7 +59,8 @@ interface Album {
   dirName: string;
   name: string;
   meta: FileMeta;
-  images: ImageEntry[];
+  thumb: string | null;
+  images: string[];
   handle: FileSystemDirectoryHandle;
 }
 
@@ -130,8 +131,6 @@ const AlbumItem: React.FC<AlbumItemProps> = ({
   onDropInternal,
   onDragOver,
 }) => {
-  const thumb = album.images[0]?.url;
-
   const handleDrop = (e: ReactDragEvent<HTMLDivElement>): void => {
     e.preventDefault();
     if (e.dataTransfer?.files?.length) onDropExternal(e.dataTransfer.files);
@@ -155,9 +154,9 @@ const AlbumItem: React.FC<AlbumItemProps> = ({
       )}
     >
       <div className="relative h-9 w-9 flex-shrink-0 overflow-hidden rounded-md bg-white/10">
-        {thumb && (
+        {album.thumb && (
           <img
-            src={thumb}
+            src={album.thumb}
             alt="thumb"
             className="h-full w-full object-cover blur-md"
           />
@@ -290,48 +289,6 @@ enum SortKey {
   NAME = "name",
 }
 
-const albumsEqual = (a: Album[], b: Album[]): boolean => {
-  if (a.length !== b.length) return false;
-
-  const aMap = new Map(a.map((album) => [album.dirName, album]));
-  const bMap = new Map(b.map((album) => [album.dirName, album]));
-
-  for (const dirName of aMap.keys()) {
-    if (!bMap.has(dirName)) return false;
-  }
-
-  for (const dirName of bMap.keys()) {
-    if (!aMap.has(dirName)) return false;
-  }
-
-  for (const [dirName, albumA] of aMap) {
-    const albumB = bMap.get(dirName);
-    if (!albumB) return false;
-
-    const aFileMap = new Map(albumA.images.map((img) => [img.file.name, img]));
-    const bFileMap = new Map(albumB.images.map((img) => [img.file.name, img]));
-
-    for (const fileName of aFileMap.keys()) {
-      if (!bFileMap.has(fileName)) return false;
-    }
-
-    for (const fileName of bFileMap.keys()) {
-      if (!aFileMap.has(fileName)) return false;
-    }
-
-    for (const [fileName, imgA] of aFileMap) {
-      const imgB = bFileMap.get(fileName);
-      if (!imgB) return false;
-
-      const aAdded = imgA.meta.added ?? 0;
-      const bAdded = imgB.meta.added ?? 0;
-      if (aAdded !== bAdded) return false;
-    }
-  }
-
-  return true;
-};
-
 const useSupports = (supportCondition: string) => {
   const [checkResult, setCheckResult] = useState<boolean | undefined>();
 
@@ -347,6 +304,7 @@ export default function PhotoGallery(): React.ReactElement {
     null,
   );
   const [albums, setAlbums] = useState<Album[]>([]);
+  const [photos, setPhotos] = useState<ImageEntry[]>([]);
   const [active, setActive] = useState<string>("");
   const [slider, setSlider] = useState<number>(3);
   const columns = 2 + slider;
@@ -372,19 +330,14 @@ export default function PhotoGallery(): React.ReactElement {
   const INITIAL_BATCH = 50;
   const BATCH_SIZE = 50;
   const [visibleCount, setVisibleCount] = useState<number>(INITIAL_BATCH);
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const sentinelRefs = useRef<HTMLDivElement[]>([]);
 
   useEffect(() => {
-    if (!active) return;
-    const activeAlbum = albums.find((a) => a.dirName === active);
-    if (!activeAlbum) return;
+    if (!photos) return;
     setSelection(
-      (prev) =>
-        new Set(
-          Array.from(prev).filter((img) => activeAlbum.images.includes(img)),
-        ),
+      (prev) => new Set(Array.from(prev).filter((img) => photos.includes(img))),
     );
-  }, [active, albums]);
+  }, [photos]);
 
   const isImage = (n: string): boolean =>
     /\.(png|jpe?g|gif|bmp|webp|avif)$/i.test(n);
@@ -398,85 +351,144 @@ export default function PhotoGallery(): React.ReactElement {
     });
 
   const loadAlbum = useCallback(
-    async (dir: FileSystemDirectoryHandle): Promise<Album> => {
-      const meta = await MetadataManager.readDirMeta(dir);
-      const images: ImageEntry[] = [];
-      for await (const [name, entry] of dir.entries()) {
-        if (entry.kind === "file" && isImage(name)) {
-          const fh = entry as FileSystemFileHandle;
-          const file = await fh.getFile();
-          const imeta = await MetadataManager.readFileMeta(dir, name);
-          if (!imeta.added) {
-            imeta.added = Date.now();
-            MetadataManager.writeFileMeta(dir, name, imeta).catch(
-              () => undefined,
-            );
-          }
-          images.push({
-            file,
-            url: URL.createObjectURL(file),
-            meta: imeta,
-            handle: fh,
-          });
-        }
+    async (dir: FileSystemDirectoryHandle | null): Promise<Album> => {
+      let readingRoot = false;
+      if (!dir) {
+        dir = rootDir;
+        readingRoot = true;
       }
+      if (!dir) {
+        throw new Error("No directory selected");
+      }
+      const meta = await MetadataManager.readDirMeta(dir);
+      const thumb = await (async (): Promise<string | null> => {
+        for await (const [name, entry] of dir.entries()) {
+          if (entry.kind === "file" && isImage(name)) {
+            const fh = entry as FileSystemFileHandle;
+            const file = await fh.getFile();
+            const imeta = await MetadataManager.readFileMeta(dir, name);
+            if (imeta.width && imeta.height) {
+              return URL.createObjectURL(file);
+            }
+          }
+        }
+        return null;
+      })();
+
+      const images = await (async (): Promise<string[]> => {
+        const names: string[] = [];
+        for await (const [name, entry] of dir.entries()) {
+          if (entry.kind === "file" && isImage(name)) {
+            names.push(name);
+          }
+        }
+        return names;
+      })();
+
       return {
-        dirName: dir.name,
-        name: meta.name ?? dir.name,
+        dirName: readingRoot ? "Uncategorized" : dir.name,
+        name: readingRoot ? "Uncategorized" : (meta.name ?? dir.name),
         meta,
+        thumb,
         images,
         handle: dir,
       };
+    },
+    [rootDir],
+  );
+
+  const loadPhotos = useCallback(
+    async (album: Album): Promise<ImageEntry[]> => {
+      await Promise.all(
+        album.images.map(async (name) => {
+          const handle = await album.handle.getFileHandle(name);
+          const file = await handle.getFile();
+          const meta = await MetadataManager.readFileMeta(album.handle, name);
+          if (!meta.width || !meta.height) {
+            const { w, h } = await loadImageDims(file);
+            meta.width = w;
+            meta.height = h;
+            MetadataManager.writeFileMeta(album.handle, name, meta).catch(
+              () => undefined,
+            );
+          }
+        }),
+      );
+
+      const entries: ImageEntry[] = [];
+      for (const name of album.images) {
+        const handle = await album.handle.getFileHandle(name);
+        const file = await handle.getFile();
+        const meta = await MetadataManager.readFileMeta(album.handle, name);
+        if (!meta.added) {
+          meta.added = Date.now();
+          MetadataManager.writeFileMeta(album.handle, name, meta).catch(
+            () => undefined,
+          );
+        }
+        entries.push({
+          file,
+          url: URL.createObjectURL(file),
+          meta,
+          handle,
+        });
+      }
+      return entries;
     },
     [],
   );
 
   const refreshAlbums = useCallback(
-    async (root: FileSystemDirectoryHandle, force = false): Promise<void> => {
+    async (root: FileSystemDirectoryHandle): Promise<void> => {
       const list: Album[] = [];
       for await (const [, entry] of root.entries())
         if (entry.kind === "directory")
           list.push(await loadAlbum(entry as FileSystemDirectoryHandle));
-      const unsorted: ImageEntry[] = [];
-      for await (const [name, fentry] of root.entries()) {
-        if (fentry.kind === "file" && isImage(name)) {
-          const fh = fentry as FileSystemFileHandle;
-          const file = await fh.getFile();
-          const meta = await MetadataManager.readFileMeta(root, name);
-          if (!meta.width || !meta.height) {
-            const { w, h } = await loadImageDims(file);
-            meta.width = w;
-            meta.height = h;
-            MetadataManager.writeFileMeta(root, name, meta).catch(
-              () => undefined,
-            );
+      list.unshift(await loadAlbum(null));
+      list.forEach((album) => {
+        if (albums.some((a) => a.dirName === album.dirName)) {
+          const existing = albums.find((a) => a.dirName === album.dirName);
+          console.log(existing?.images, album.images);
+          if (
+            existing &&
+            (existing.images.some((img) => !album.images.includes(img)) ||
+              album.images.some((img) => !existing.images.includes(img)))
+          ) {
+            loadPhotos(album)
+              .then((newPhotos) => {
+                if (active === album.dirName) {
+                  setPhotos((prev) => {
+                    return [
+                      ...prev.filter((p) =>
+                        newPhotos.some((n) => n.file.name === p.file.name),
+                      ),
+                      ...newPhotos.filter(
+                        (n) => !prev.some((p) => p.file.name === n.file.name),
+                      ),
+                    ];
+                  });
+                }
+              })
+              .catch(() => undefined);
           }
-          if (!meta.added) {
-            meta.added = Date.now();
-            MetadataManager.writeFileMeta(root, name, meta).catch(
-              () => undefined,
-            );
-          }
-          unsorted.push({
-            file,
-            url: URL.createObjectURL(file),
-            meta,
-            handle: fh,
-          });
+          setAlbums((prev) =>
+            prev.map((a) =>
+              a.dirName === album.dirName ? { ...a, ...album } : a,
+            ),
+          );
+        } else {
+          setAlbums((prev) => [...prev, album]);
         }
-      }
-      list.unshift({
-        dirName: UNCATEGORIZED_KEY,
-        name: "Uncategorized",
-        meta: {},
-        images: unsorted,
-        handle: root,
       });
-      setAlbums((prev) => (!force && albumsEqual(prev, list) ? prev : list));
+      albums.forEach((album) => {
+        if (!list.some((a) => a.dirName === album.dirName)) {
+          setAlbums((prev) => prev.filter((a) => a.dirName !== album.dirName));
+        }
+      });
       if (!active && list.length)
         setActive(list?.[0]?.dirName ?? UNCATEGORIZED_KEY);
     },
-    [active, loadAlbum, setAlbums, setActive],
+    [active, loadAlbum, setAlbums, setActive, albums, loadPhotos],
   );
 
   useEffect(() => {
@@ -684,7 +696,7 @@ export default function PhotoGallery(): React.ReactElement {
     imgs: ImageEntry[],
   ): Promise<void> => {
     for (const img of imgs) {
-      if (target.images.some((i) => i.file.name === img.file.name)) continue;
+      if (target.images.some((i) => i === img.file.name)) continue;
       const srcFile = await img.handle.getFile();
       const targetHandle = await target.handle.getFileHandle(img.file.name, {
         create: true,
@@ -692,15 +704,17 @@ export default function PhotoGallery(): React.ReactElement {
       const writable = await targetHandle.createWritable();
       await writable.write(await srcFile.arrayBuffer());
       await writable.close();
-      const parent = albums.find((a) => a.images.includes(img));
+      const parent = albums.find((a) => a.images.includes(img.file.name));
       if (parent) {
         await parent.handle.removeEntry(img.file.name);
-        parent.images = parent.images.filter((i) => i !== img);
+        parent.images = parent.images.filter((i) => i !== img.file.name);
       }
-      target.images.push({ ...img, handle: targetHandle });
+      target.images.push(img.file.name);
     }
+    setPhotos((prev) =>
+      prev.filter((p) => !imgs.some((i) => i.file.name === p.file.name)),
+    );
     setSelection(new Set());
-    if (rootDir) refreshAlbums(rootDir, true).catch(() => undefined);
   };
 
   const onAlbumInternalDrop = async (album: Album): Promise<void> => {
@@ -718,7 +732,7 @@ export default function PhotoGallery(): React.ReactElement {
         if (!isImage(file.name)) return;
         tasks.push(
           (async (): Promise<void> => {
-            if (album.images.some((i) => i.file.name === file.name)) return;
+            if (album.images.some((i) => i === file.name)) return;
             const fh = await album.handle.getFileHandle(file.name, {
               create: true,
             });
@@ -736,14 +750,16 @@ export default function PhotoGallery(): React.ReactElement {
               file.name,
               entry.meta,
             ).catch(() => undefined);
-            album.images.push(entry);
+            album.images.push(file.name);
+            if (active === album.dirName) {
+              setPhotos((prev) => [...prev, entry]);
+            }
           })(),
         );
       });
       await Promise.all(tasks);
-      if (rootDir) await refreshAlbums(rootDir, true);
     },
-    [refreshAlbums, rootDir],
+    [active],
   );
 
   const onGridExternalDrop = async (e: ReactDragEvent): Promise<void> => {
@@ -758,25 +774,30 @@ export default function PhotoGallery(): React.ReactElement {
   const clearAlbumHighlight = (): void => setHighlightAlbumId(null);
 
   const deletePhotos = async (imgs: ImageEntry[]): Promise<void> => {
+    if (!activeAlbum) return;
     for (const img of imgs) {
-      const parent = albums.find((a) => a.images.includes(img));
+      const parent = albums.find(
+        (a) =>
+          a.images.includes(img.file.name) && a.dirName === activeAlbum.dirName,
+      );
       if (!parent) continue;
       await parent.handle.removeEntry(img.file.name);
       try {
         const base = img.file.name.replace(/\.[^.]+$/, "");
         await parent.handle.removeEntry(`.${base}.json`);
       } catch {}
-      parent.images = parent.images.filter((i) => i !== img);
+      parent.images = parent.images.filter((i) => i !== img.file.name);
+      setPhotos((prev) => prev.filter((p) => p.file.name !== img.file.name));
     }
     setSelection(new Set());
-    if (rootDir) await refreshAlbums(rootDir, true);
   };
 
   const deleteAlbum = async (album: Album): Promise<void> => {
     if (album.dirName === UNCATEGORIZED_KEY || !rootDir) return;
     await rootDir.removeEntry(album.dirName, { recursive: true });
     setDeleteAlbumConfirm(false);
-    await refreshAlbums(rootDir, true);
+    setActive(UNCATEGORIZED_KEY);
+    await refreshAlbums(rootDir);
   };
 
   const activeAlbum = albums.find((a) => a.dirName === active);
@@ -786,14 +807,14 @@ export default function PhotoGallery(): React.ReactElement {
   }, [activeAlbum]);
 
   const sortedFilteredImgs: ImageEntry[] = React.useMemo(() => {
-    if (!activeAlbum) return [];
+    if (!photos) return [];
     const cmp: Record<SortKey, (a: ImageEntry, b: ImageEntry) => number> = {
       [SortKey.DATE]: (a, b) => (a.meta.added ?? 0) - (b.meta.added ?? 0),
       [SortKey.NAME]: (a, b) => a.file.name.localeCompare(b.file.name),
     };
-    const sorted = [...activeAlbum.images].sort(cmp[sortKey]);
+    const sorted = [...photos].sort(cmp[sortKey]);
     return sortAsc ? sorted : sorted.reverse();
-  }, [activeAlbum, sortKey, sortAsc]);
+  }, [sortKey, sortAsc, photos]);
 
   const imagesInColumns: ImageEntry[][] = React.useMemo(() => {
     type Col = { h: number; imgs: ImageEntry[] };
@@ -802,8 +823,8 @@ export default function PhotoGallery(): React.ReactElement {
       imgs: [],
     }));
     sortedFilteredImgs.forEach((img) => {
-      const target = cols.reduce((a, b) => (a.h <= b.h ? a : b)); // shortest column
-      const ratio = (img.meta.height ?? 1) / (img.meta.width ?? 1); // fallback prevents NaN
+      const target = cols.reduce((a, b) => (a.h <= b.h ? a : b));
+      const ratio = (img.meta.height ?? 1) / (img.meta.width ?? 1);
       target.imgs.push(img);
       target.h += ratio;
     });
@@ -886,7 +907,7 @@ export default function PhotoGallery(): React.ReactElement {
   }, [activeAlbum, onAlbumExternalDrop]);
 
   useEffect(() => {
-    if (!sentinelRef.current) return;
+    if (!sentinelRefs.current) return;
 
     const observer = new IntersectionObserver(
       ([entry]) => {
@@ -902,9 +923,9 @@ export default function PhotoGallery(): React.ReactElement {
       },
     );
 
-    observer.observe(sentinelRef.current);
+    sentinelRefs.current.forEach((el) => observer.observe(el));
     return () => observer.disconnect();
-  }, [sortedFilteredImgs.length]);
+  }, [sortedFilteredImgs.length, columns]);
 
   const isFirefox = useSupports("-moz-appearance:none");
   if (isFirefox) {
@@ -969,7 +990,10 @@ export default function PhotoGallery(): React.ReactElement {
                 album={album}
                 active={album.dirName === active}
                 highlighted={highlightAlbumId === album.dirName}
-                onClick={() => setActive(album.dirName)}
+                onClick={async () => {
+                  setPhotos(await loadPhotos(album));
+                  setActive(album.dirName);
+                }}
                 onDropExternal={(files) => onAlbumExternalDrop(album, files)}
                 onDropInternal={() => onAlbumInternalDrop(album)}
                 onDragOver={() => onAlbumDragOver(album.dirName)}
@@ -1174,12 +1198,17 @@ export default function PhotoGallery(): React.ReactElement {
                         onRequestDelete={(i) => deletePhotos([i])}
                       />
                     ))}
+                    <div
+                      ref={(el) => {
+                        if (el) sentinelRefs.current[colIndex] = el;
+                      }}
+                      style={{ height: 1 }}
+                    />
                   </div>
                 ))}
               </div>
             )}
           </AnimatePresence>
-          <div ref={sentinelRef} style={{ height: 1 }} />
         </div>
       </div>
 
