@@ -55,6 +55,7 @@ interface ImageEntry {
   url: string;
   meta: FileMeta;
   handle: FileSystemFileHandle;
+  deleted?: boolean;
 }
 
 interface Album {
@@ -215,7 +216,7 @@ const MasonryImage: React.FC<MasonryImageProps> = ({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0, y: -300, transition: { duration: 0.15 } }}
-      className="group relative break-inside-avoid select-none"
+      className="group relative mb-4 break-inside-avoid select-none"
       draggable
       onDragStart={(e) => onDragStart(e, img)}
     >
@@ -516,63 +517,79 @@ export default function PhotoGallery(): React.ReactElement {
     async (root: FileSystemDirectoryHandle): Promise<void> => {
       if (refreshMutex.current) return;
       refreshMutex.current = true;
-      if (!albumsReady && albumLoadingStatus !== "Loading albums...") {
-        setAlbumLoadingStatus("Loading albums...");
-      }
-      const list: Album[] = [];
-      for await (const [, entry] of root.entries())
-        if (entry.kind === "directory")
-          list.push(await loadAlbum(entry as FileSystemDirectoryHandle));
-      list.unshift(await loadAlbum(root, true));
-      list.forEach((album) => {
-        const existing = albums.find((a) => a.dirName === album.dirName);
-        if (!existing) {
-          setAlbums((prev) => [...prev, album]);
-          return;
+      try {
+        if (!albumsReady && albumLoadingStatus !== "Loading albums...") {
+          setAlbumLoadingStatus("Loading albums...");
+        }
+        const list: Album[] = [];
+        for await (const [, entry] of root.entries())
+          if (entry.kind === "directory")
+            list.push(await loadAlbum(entry as FileSystemDirectoryHandle));
+        list.unshift(await loadAlbum(root, true));
+        list.forEach((album) => {
+          const existing = albums.find((a) => a.dirName === album.dirName);
+          if (!existing) {
+            setAlbums((prev) => [...prev, album]);
+            return;
+          }
+
+          if (
+            !existing.images.some((img) => !album.images.includes(img)) &&
+            !album.images.some((img) => !existing.images.includes(img))
+          )
+            return;
+
+          loadPhotos(album)
+            .then((newPhotos) => {
+              if (active === album.dirName) {
+                photos
+                  .filter(
+                    (p) => !newPhotos.some((n) => n.file.name === p.file.name),
+                  )
+                  .forEach((p) => URL.revokeObjectURL(p.url));
+
+                setPhotos((prev) => {
+                  return [
+                    ...prev.filter((p) =>
+                      newPhotos.some((n) => n.file.name === p.file.name),
+                    ),
+                    ...newPhotos.filter(
+                      (n) => !prev.some((p) => p.file.name === n.file.name),
+                    ),
+                  ];
+                });
+
+                setAlbums((prev) =>
+                  prev.map((a) =>
+                    a.dirName === album.dirName
+                      ? { ...a, images: newPhotos.map((n) => n.file.name) }
+                      : a,
+                  ),
+                );
+              }
+            })
+            .catch(console.error);
+        });
+        albums.forEach((album) => {
+          if (!list.some((a) => a.dirName === album.dirName)) {
+            setAlbums((prev) =>
+              prev.filter((a) => a.dirName !== album.dirName),
+            );
+          }
+        });
+
+        if (!active && list.length && list[0]) {
+          setActive(list[0].dirName);
+          setPhotos(await loadPhotos(list[0]));
         }
 
-        if (
-          !existing.images.some((img) => !album.images.includes(img)) &&
-          !album.images.some((img) => !existing.images.includes(img))
-        )
-          return;
-
-        loadPhotos(album)
-          .then((newPhotos) => {
-            if (active === album.dirName) {
-              photos
-                .filter(
-                  (p) => !newPhotos.some((n) => n.file.name === p.file.name),
-                )
-                .forEach((p) => URL.revokeObjectURL(p.url));
-
-              setPhotos((prev) => {
-                return [
-                  ...prev.filter((p) =>
-                    newPhotos.some((n) => n.file.name === p.file.name),
-                  ),
-                  ...newPhotos.filter(
-                    (n) => !prev.some((p) => p.file.name === n.file.name),
-                  ),
-                ];
-              });
-            }
-          })
-          .catch(() => undefined);
-      });
-      albums.forEach((album) => {
-        if (!list.some((a) => a.dirName === album.dirName)) {
-          setAlbums((prev) => prev.filter((a) => a.dirName !== album.dirName));
+        if (!albumsReady) {
+          setAlbumsReady(true);
+          setAlbumLoadingStatus("");
         }
-      });
-      if (!active && list.length)
-        setActive(list?.[0]?.dirName ?? UNCATEGORIZED_KEY);
-
-      if (!albumsReady) {
-        setAlbumsReady(true);
-        setAlbumLoadingStatus("");
+      } finally {
+        refreshMutex.current = false;
       }
-      refreshMutex.current = false;
     },
     [
       active,
@@ -821,11 +838,18 @@ export default function PhotoGallery(): React.ReactElement {
       )
       .forEach((p) => URL.revokeObjectURL(p.url));
     setPhotos((prev) =>
-      prev.filter(
-        (p) =>
+      prev.map((p) => {
+        if (
           discarded.some((i) => i.file.name === p.file.name) ||
-          !imgs.some((i) => i.file.name === p.file.name),
-      ),
+          !imgs.some((i) => i.file.name === p.file.name)
+        ) {
+          return p;
+        }
+        return {
+          ...p,
+          deleted: true,
+        };
+      }),
     );
     setSelection(new Set());
   };
@@ -900,7 +924,15 @@ export default function PhotoGallery(): React.ReactElement {
         await parent.handle.removeEntry(`.${base}.json`);
       } catch {}
       parent.images = parent.images.filter((i) => i !== img.file.name);
-      setPhotos((prev) => prev.filter((p) => p.file.name !== img.file.name));
+      setPhotos((prev) => {
+        return prev.map((p) => {
+          if (p.file.name === img.file.name) {
+            URL.revokeObjectURL(p.url);
+            return { ...p, deleted: true };
+          }
+          return p;
+        });
+      });
     }
     setSelection(new Set());
   };
@@ -909,8 +941,12 @@ export default function PhotoGallery(): React.ReactElement {
     if (album.dirName === UNCATEGORIZED_KEY || !rootDir) return;
     await rootDir.removeEntry(album.dirName, { recursive: true });
     setDeleteAlbumConfirm(false);
-    setActive(UNCATEGORIZED_KEY);
     await refreshAlbums(rootDir);
+    const uncategorized = albums.find((a) => a.dirName === UNCATEGORIZED_KEY);
+    if (uncategorized) {
+      setActive(UNCATEGORIZED_KEY);
+      setPhotos(await loadPhotos(uncategorized));
+    }
   };
 
   const activeAlbum = albums.find((a) => a.dirName === active);
@@ -1117,6 +1153,9 @@ export default function PhotoGallery(): React.ReactElement {
                 active={album.dirName === active}
                 highlighted={highlightAlbumId === album.dirName}
                 onClick={async () => {
+                  if (photos) {
+                    photos.forEach((p) => URL.revokeObjectURL(p.url));
+                  }
                   setPhotos(await loadPhotos(album));
                   setActive(album.dirName);
                 }}
@@ -1307,23 +1346,27 @@ export default function PhotoGallery(): React.ReactElement {
                 }}
               >
                 {Array.from({ length: columns }).map((_, colIndex) => (
-                  <div key={`col-${colIndex}`} className="flex flex-col gap-4">
+                  <div key={`col-${colIndex}`} className="flex flex-col">
                     {imagesInColumns[colIndex]!.slice(
                       0,
                       Math.ceil(visibleCount / columns),
-                    ).map((img) => (
-                      <MasonryImage
-                        key={img.url}
-                        img={img}
-                        selected={selection.has(img)}
-                        onSelectToggle={toggleSelect}
-                        onDragStart={onDragStartInternal}
-                        onView={() =>
-                          setViewerIndex(sortedFilteredImgs.indexOf(img))
-                        }
-                        onRequestDelete={(i) => deletePhotos([i])}
-                      />
-                    ))}
+                    ).map((img) =>
+                      img.deleted ? (
+                        <div key={img.url} />
+                      ) : (
+                        <MasonryImage
+                          key={img.url}
+                          img={img}
+                          selected={selection.has(img)}
+                          onSelectToggle={toggleSelect}
+                          onDragStart={onDragStartInternal}
+                          onView={() =>
+                            setViewerIndex(sortedFilteredImgs.indexOf(img))
+                          }
+                          onRequestDelete={(i) => deletePhotos([i])}
+                        />
+                      ),
+                    )}
                     <div
                       ref={(el) => {
                         if (el) sentinelRefs.current[colIndex] = el;
