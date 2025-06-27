@@ -42,6 +42,7 @@ import React, {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { isHeic, heicTo } from "heic-to";
+import { Toaster, toast } from "sonner";
 
 type FileMeta = {
   name?: string;
@@ -348,8 +349,8 @@ export default function PhotoGallery(): React.ReactElement {
 
   const prevActiveIdx = useRef<number>(-1);
 
-  const INITIAL_BATCH = 50;
-  const BATCH_SIZE = 50;
+  const INITIAL_BATCH = 30;
+  const BATCH_SIZE = 30;
   const [visibleCount, setVisibleCount] = useState<number>(INITIAL_BATCH);
   const sentinelRefs = useRef<HTMLDivElement[]>([]);
   const [albumsReady, setAlbumsReady] = useState<boolean>(false);
@@ -386,43 +387,93 @@ export default function PhotoGallery(): React.ReactElement {
 
   const convertAllHEIC = useCallback(
     async (dir: FileSystemDirectoryHandle): Promise<void> => {
+      const heicFiles: string[] = [];
       for await (const [name, entry] of dir.entries()) {
         if (entry.kind !== "file") continue;
         const fileHandle = entry as FileSystemFileHandle;
         const file = await fileHandle.getFile();
-        if (!(await isHeic(file))) continue;
-        if (albumLoadingStatus !== "Converting HEICs...") {
-          setAlbumLoadingStatus("Converting HEICs...");
-        }
-        try {
-          const converted = await heicTo({
-            blob: file,
-            type: "image/png",
-            quality: 0.7,
-          });
-          if (converted instanceof Blob) {
-            const newFile = new File([converted], name.split(".")[0] + ".png", {
-              type: "image/png",
-            });
-            const newHandle = await dir.getFileHandle(newFile.name, {
-              create: true,
-            });
-            const writable = await newHandle.createWritable();
-            await writable.write(await newFile.arrayBuffer());
-            await writable.close();
-            await dir.removeEntry(name);
-          } else {
-            console.error(
-              "HEIC conversion returned unexpected type:",
-              converted,
-            );
-          }
-        } catch (err) {
-          console.error("Failed to convert HEIC file:", err);
+        if (await isHeic(file)) {
+          heicFiles.push(name);
         }
       }
+
+      if (heicFiles.length === 0) return;
+      setAlbumLoadingStatus("Converting HEIC files...");
+
+      const meta = await MetadataManager.readDirMeta(dir);
+      const albumName = meta.name ?? dir.name;
+
+      let convertedCount = 0;
+      const toastId = toast.loading(
+        `Converting HEICs in "${albumName}" (${convertedCount}/${heicFiles.length})`,
+        {
+          duration: Infinity,
+        },
+      );
+
+      try {
+        for (const name of heicFiles) {
+          const fileHandle = await dir.getFileHandle(name);
+          const file = await fileHandle.getFile();
+
+          try {
+            const converted = await heicTo({
+              blob: file,
+              type: "image/png",
+              quality: 0.7,
+            });
+
+            if (converted instanceof Blob) {
+              const newFile = new File(
+                [converted],
+                name.split(".")[0] + ".png",
+                {
+                  type: "image/png",
+                },
+              );
+              const newHandle = await dir.getFileHandle(newFile.name, {
+                create: true,
+              });
+              const writable = await newHandle.createWritable();
+              await writable.write(await newFile.arrayBuffer());
+              await writable.close();
+              await dir.removeEntry(name);
+            } else {
+              console.error(
+                "HEIC conversion returned unexpected type:",
+                converted,
+              );
+            }
+          } catch (err) {
+            console.error("Failed to convert HEIC file:", err);
+          }
+
+          convertedCount++;
+          toast.loading(
+            `Converting HEICs in "${albumName}" (${convertedCount}/${heicFiles.length})`,
+            {
+              id: toastId,
+              duration: Infinity,
+            },
+          );
+        }
+
+        toast.success(
+          `Converted ${convertedCount} HEIC file(s) in "${albumName}"`,
+          {
+            id: toastId,
+            duration: 1000,
+          },
+        );
+      } catch (error) {
+        toast.error(`Failed to convert HEICs in "${albumName}"`, {
+          id: toastId,
+          duration: 3000,
+        });
+        console.error("HEIC conversion error:", error);
+      }
     },
-    [albumLoadingStatus],
+    [],
   );
 
   const loadAlbum = useCallback(
@@ -808,9 +859,27 @@ export default function PhotoGallery(): React.ReactElement {
     imgs: ImageEntry[],
   ): Promise<void> => {
     const discarded: ImageEntry[] = [];
+    const totalCount = imgs.length;
+    let processedCount = 0;
+
+    const toastId = toast.loading(
+      `Moving images to "${target.name}" (${processedCount}/${totalCount})`,
+      {
+        duration: Infinity,
+      },
+    );
+
     for (const img of imgs) {
       if (target.images.some((i) => i === img.file.name)) {
         discarded.push(img);
+        processedCount++;
+        toast.loading(
+          `Moving images to "${target.name}" (${processedCount}/${totalCount})`,
+          {
+            id: toastId,
+            duration: Infinity,
+          },
+        );
         continue;
       }
       const srcFile = await img.handle.getFile();
@@ -826,7 +895,17 @@ export default function PhotoGallery(): React.ReactElement {
         parent.images = parent.images.filter((i) => i !== img.file.name);
       }
       target.images.push(img.file.name);
+
+      processedCount++;
+      toast.loading(
+        `Moving images to "${target.name}" (${processedCount}/${totalCount})`,
+        {
+          id: toastId,
+          duration: Infinity,
+        },
+      );
     }
+
     photos
       .filter(
         (p) =>
@@ -849,6 +928,24 @@ export default function PhotoGallery(): React.ReactElement {
       }),
     );
     setSelection(new Set());
+
+    if (discarded.length) {
+      toast.error(
+        `Skipped ${discarded.length} image(s) already in album "${target.name}"`,
+        {
+          id: toastId,
+          duration: 3000,
+        },
+      );
+    } else {
+      toast.success(
+        `Moved ${imgs.length - discarded.length} image(s) to album "${target.name}"`,
+        {
+          id: toastId,
+          duration: 2000,
+        },
+      );
+    }
   };
 
   const onAlbumInternalDrop = async (album: Album): Promise<void> => {
@@ -861,12 +958,34 @@ export default function PhotoGallery(): React.ReactElement {
 
   const onAlbumExternalDrop = useCallback(
     async (album: Album, files: FileList): Promise<void> => {
+      const imageFiles = Array.from(files).filter((file) => isImage(file.name));
+      if (imageFiles.length === 0) return;
+
+      let processedCount = 0;
+      const totalCount = imageFiles.length;
+
+      const toastId = toast.loading(
+        `Adding images to "${album.name}" (${processedCount}/${totalCount})`,
+        {
+          duration: Infinity,
+        },
+      );
+
       const tasks: Promise<void>[] = [];
-      Array.from(files).forEach((file) => {
-        if (!isImage(file.name)) return;
+      imageFiles.forEach((file) => {
         tasks.push(
           (async (): Promise<void> => {
-            if (album.images.some((i) => i === file.name)) return;
+            if (album.images.some((i) => i === file.name)) {
+              processedCount++;
+              toast.loading(
+                `Adding images to "${album.name}" (${processedCount}/${totalCount})`,
+                {
+                  id: toastId,
+                  duration: Infinity,
+                },
+              );
+              return;
+            }
             const fh = await album.handle.getFileHandle(file.name, {
               create: true,
             });
@@ -888,10 +1007,27 @@ export default function PhotoGallery(): React.ReactElement {
             if (active === album.dirName) {
               setPhotos((prev) => [...prev, entry]);
             }
+            processedCount++;
+            toast.loading(
+              `Adding images to "${album.name}" (${processedCount}/${totalCount})`,
+              {
+                id: toastId,
+                duration: Infinity,
+              },
+            );
           })(),
         );
       });
+
       await Promise.all(tasks);
+
+      toast.success(
+        `Added ${imageFiles.length} image(s) to album "${album.name}"`,
+        {
+          id: toastId,
+          duration: 2000,
+        },
+      );
     },
     [active],
   );
@@ -932,6 +1068,11 @@ export default function PhotoGallery(): React.ReactElement {
       });
     }
     setSelection(new Set());
+    setDeleteConfirmOpen(false);
+    toast(`Deleted ${imgs.length} image(s)`, {
+      icon: "success",
+      duration: 2000,
+    });
   };
 
   const deleteAlbum = async (album: Album): Promise<void> => {
@@ -944,6 +1085,10 @@ export default function PhotoGallery(): React.ReactElement {
       setActive(UNCATEGORIZED_KEY);
       setPhotos(await loadPhotos(uncategorized));
     }
+    toast(`Album ${album.name} deleted`, {
+      icon: "success",
+      duration: 2000,
+    });
   };
 
   const activeAlbum = albums.find((a) => a.dirName === active);
@@ -1100,6 +1245,7 @@ export default function PhotoGallery(): React.ReactElement {
       onDrop={onGridExternalDrop}
       onDragOver={(e) => e.preventDefault()}
     >
+      <Toaster theme="dark" />
       <div className="border-border bg-background/95 w-64 space-y-3 border-r p-4">
         {!rootDir && (
           <Button onClick={pickDirectory} className="w-full">
