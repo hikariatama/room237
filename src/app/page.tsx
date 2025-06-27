@@ -448,7 +448,6 @@ export default function PhotoGallery(): React.ReactElement {
       list.forEach((album) => {
         if (albums.some((a) => a.dirName === album.dirName)) {
           const existing = albums.find((a) => a.dirName === album.dirName);
-          console.log(existing?.images, album.images);
           if (
             existing &&
             (existing.images.some((img) => !album.images.includes(img)) ||
@@ -471,11 +470,6 @@ export default function PhotoGallery(): React.ReactElement {
               })
               .catch(() => undefined);
           }
-          setAlbums((prev) =>
-            prev.map((a) =>
-              a.dirName === album.dirName ? { ...a, ...album } : a,
-            ),
-          );
         } else {
           setAlbums((prev) => [...prev, album]);
         }
@@ -804,7 +798,7 @@ export default function PhotoGallery(): React.ReactElement {
 
   useEffect(() => {
     setVisibleCount(INITIAL_BATCH);
-  }, [activeAlbum]);
+  }, [active]);
 
   const sortedFilteredImgs: ImageEntry[] = React.useMemo(() => {
     if (!photos) return [];
@@ -886,7 +880,7 @@ export default function PhotoGallery(): React.ReactElement {
   }, [active, albums]);
 
   useEffect(() => {
-    if (!activeAlbum) return;
+    if (!active) return;
 
     const handlePaste = (e: ClipboardEvent) => {
       const imgs: File[] = [];
@@ -899,15 +893,20 @@ export default function PhotoGallery(): React.ReactElement {
       if (!imgs.length) return;
 
       e.preventDefault();
-      void onAlbumExternalDrop(activeAlbum, imgs as unknown as FileList);
+      void onAlbumExternalDrop(
+        albums.find((a) => a.dirName === active)!,
+        imgs as unknown as FileList,
+      );
     };
 
     window.addEventListener("paste", handlePaste);
     return () => window.removeEventListener("paste", handlePaste);
-  }, [activeAlbum, onAlbumExternalDrop]);
+  }, [albums, active, onAlbumExternalDrop]);
 
   useEffect(() => {
     if (!sentinelRefs.current) return;
+
+    console.log("Updating sentinels", sentinelRefs.current);
 
     const observer = new IntersectionObserver(
       ([entry]) => {
@@ -1005,7 +1004,7 @@ export default function PhotoGallery(): React.ReactElement {
 
       <div className="flex h-screen flex-1 flex-col">
         <div className="border-border bg-background/95 relative flex flex-wrap items-center gap-4 border-b px-4 py-2">
-          {activeAlbum?.images.length ? (
+          {active ? (
             <>
               <span className="text-sm font-medium">Zoom</span>
               <Slider
@@ -1041,7 +1040,7 @@ export default function PhotoGallery(): React.ReactElement {
               <ArrowDownAZ className="h-4 w-4" />
             )}
           </Toggle>
-          {activeAlbum && activeAlbum.dirName !== UNCATEGORIZED_KEY && (
+          {active && active !== UNCATEGORIZED_KEY && (
             <Popover
               open={deleteAlbumConfirm}
               onOpenChange={setDeleteAlbumConfirm}
@@ -1062,7 +1061,7 @@ export default function PhotoGallery(): React.ReactElement {
                 <Button
                   variant="destructive"
                   className="mb-2 w-full"
-                  onClick={() => deleteAlbum(activeAlbum)}
+                  onClick={() => deleteAlbum(activeAlbum!)}
                 >
                   Delete
                 </Button>
@@ -1166,7 +1165,7 @@ export default function PhotoGallery(): React.ReactElement {
           className="flex-1 overflow-y-auto p-4"
           onDragOver={(e) => e.preventDefault()}
         >
-          {!sortedFilteredImgs.length && activeAlbum && (
+          {!sortedFilteredImgs.length && active && (
             <div className="text-muted-foreground w-full text-center text-lg font-medium">
               No photos found
             </div>
