@@ -27,6 +27,7 @@ import {
   CircleX,
   EyeOff,
   FolderOpen,
+  Loader2,
   Plus,
   SendToBack,
   Trash2,
@@ -40,6 +41,7 @@ import React, {
   type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
+import { isHeic, heicTo } from "heic-to";
 
 type FileMeta = {
   name?: string;
@@ -148,12 +150,12 @@ const AlbumItem: React.FC<AlbumItemProps> = ({
       }}
       onDrop={handleDrop as unknown as React.DragEventHandler<HTMLDivElement>}
       className={cn(
-        "relative mb-2 flex cursor-pointer items-center gap-2 rounded-lg border-2 py-2 pr-3 pl-2 transition-colors select-none",
+        "relative mb-1 flex cursor-pointer items-center gap-2 rounded-lg border-2 py-1 pr-3 pl-2 transition-colors select-none",
         active ? "bg-white/10" : "hover:bg-white/5",
         highlighted ? "border-primary" : "border-transparent",
       )}
     >
-      <div className="relative h-9 w-9 flex-shrink-0 overflow-hidden rounded-md bg-white/10">
+      <div className="relative size-7 flex-shrink-0 overflow-hidden rounded-md bg-white/10">
         {album.thumb && (
           <img
             src={album.thumb}
@@ -162,11 +164,13 @@ const AlbumItem: React.FC<AlbumItemProps> = ({
           />
         )}
         <div className="absolute inset-0 flex items-center justify-center bg-black/30">
-          <EyeOff className="text-foreground size-4" />
+          <EyeOff className="text-foreground size-3" />
         </div>
       </div>
-      <span className="flex-1 truncate">{album.name}</span>
-      <span className="text-muted-foreground">{album.images.length}</span>
+      <span className="flex-1 truncate text-sm">{album.name}</span>
+      <span className="text-muted-foreground text-sm">
+        {album.images.length}
+      </span>
     </motion.div>
   );
 };
@@ -193,7 +197,9 @@ const MasonryImage: React.FC<MasonryImageProps> = ({
 }) => {
   const [confirm, setConfirm] = useState(false);
 
-  const handleImageClick = (e: ReactMouseEvent<HTMLImageElement>): void => {
+  const handleImageClick = (
+    e: ReactMouseEvent<HTMLImageElement> | ReactMouseEvent<HTMLVideoElement>,
+  ): void => {
     const additive = e.metaKey || e.ctrlKey;
     if (additive) {
       e.preventDefault();
@@ -219,12 +225,29 @@ const MasonryImage: React.FC<MasonryImageProps> = ({
           selected && "ring-4 ring-blue-500",
         )}
       >
-        <img
-          src={img.url}
-          alt={img.file.name}
-          className="block w-full cursor-pointer select-none"
-          onClick={handleImageClick}
-        />
+        {img.file.type.startsWith("video") ? (
+          <video
+            className="block w-full cursor-pointer select-none"
+            onClick={handleImageClick}
+            controls
+            muted
+            loop
+            playsInline
+            onError={(e) =>
+              console.error("💥 video error:", e.currentTarget.error)
+            }
+          >
+            <source src={img.url} type={img.file.type || "video/mp4"} />
+            Your browser does not support the video tag.
+          </video>
+        ) : (
+          <img
+            src={img.url}
+            alt={img.file.name}
+            className="block w-full cursor-pointer select-none"
+            onClick={handleImageClick}
+          />
+        )}
         <motion.button
           key={`delete-button-${img.url}`}
           whileHover={{ scale: 1.1 }}
@@ -307,7 +330,7 @@ export default function PhotoGallery(): React.ReactElement {
   const [photos, setPhotos] = useState<ImageEntry[]>([]);
   const [active, setActive] = useState<string>("");
   const [slider, setSlider] = useState<number>(3);
-  const columns = 2 + slider;
+  const columns = 2 + 6 - slider;
 
   const [sortKey, setSortKey] = useState<SortKey>(SortKey.NAME);
   const [sortAsc, setSortAsc] = useState<boolean>(true);
@@ -331,6 +354,19 @@ export default function PhotoGallery(): React.ReactElement {
   const BATCH_SIZE = 50;
   const [visibleCount, setVisibleCount] = useState<number>(INITIAL_BATCH);
   const sentinelRefs = useRef<HTMLDivElement[]>([]);
+  const [albumsReady, setAlbumsReady] = useState<boolean>(false);
+  const [albumLoadingStatus, setAlbumLoadingStatus] = useState<string>("");
+  const refreshMutex = useRef<boolean>(false);
+
+  const sortedAlbums = React.useMemo(() => {
+    const sorted = [...albums].sort((a, b) => a.name.localeCompare(b.name));
+    const uncategorized = sorted.find((a) => a.dirName === UNCATEGORIZED_KEY);
+    if (uncategorized) {
+      sorted.splice(sorted.indexOf(uncategorized), 1);
+      sorted.unshift(uncategorized);
+    }
+    return sorted;
+  }, [albums]);
 
   useEffect(() => {
     if (!photos) return;
@@ -340,7 +376,7 @@ export default function PhotoGallery(): React.ReactElement {
   }, [photos]);
 
   const isImage = (n: string): boolean =>
-    /\.(png|jpe?g|gif|bmp|webp|avif)$/i.test(n);
+    /\.(png|jpe?g|gif|bmp|webp|avif|mp4)$/i.test(n);
 
   const loadImageDims = (file: File): Promise<{ w: number; h: number }> =>
     new Promise((resolve, reject) => {
@@ -350,17 +386,53 @@ export default function PhotoGallery(): React.ReactElement {
       img.src = URL.createObjectURL(file);
     });
 
+  const convertAllHEIC = useCallback(
+    async (dir: FileSystemDirectoryHandle): Promise<void> => {
+      for await (const [name, entry] of dir.entries()) {
+        if (entry.kind !== "file") continue;
+        const fileHandle = entry as FileSystemFileHandle;
+        const file = await fileHandle.getFile();
+        if (!(await isHeic(file))) continue;
+        if (albumLoadingStatus !== "Converting HEICs...") {
+          setAlbumLoadingStatus("Converting HEICs...");
+        }
+        try {
+          const converted = await heicTo({
+            blob: file,
+            type: "image/png",
+            quality: 0.7,
+          });
+          if (converted instanceof Blob) {
+            const newFile = new File([converted], name.split(".")[0] + ".png", {
+              type: "image/png",
+            });
+            const newHandle = await dir.getFileHandle(newFile.name, {
+              create: true,
+            });
+            const writable = await newHandle.createWritable();
+            await writable.write(await newFile.arrayBuffer());
+            await writable.close();
+            await dir.removeEntry(name);
+          } else {
+            console.error(
+              "HEIC conversion returned unexpected type:",
+              converted,
+            );
+          }
+        } catch (err) {
+          console.error("Failed to convert HEIC file:", err);
+        }
+      }
+    },
+    [albumLoadingStatus],
+  );
+
   const loadAlbum = useCallback(
-    async (dir: FileSystemDirectoryHandle | null): Promise<Album> => {
-      let readingRoot = false;
-      if (!dir) {
-        dir = rootDir;
-        readingRoot = true;
-      }
-      if (!dir) {
-        throw new Error("No directory selected");
-      }
+    async (dir: FileSystemDirectoryHandle, isRoot = false): Promise<Album> => {
       const meta = await MetadataManager.readDirMeta(dir);
+
+      await convertAllHEIC(dir);
+
       const thumb = await (async (): Promise<string | null> => {
         for await (const [name, entry] of dir.entries()) {
           if (entry.kind === "file" && isImage(name)) {
@@ -386,15 +458,15 @@ export default function PhotoGallery(): React.ReactElement {
       })();
 
       return {
-        dirName: readingRoot ? "Uncategorized" : dir.name,
-        name: readingRoot ? "Uncategorized" : (meta.name ?? dir.name),
+        dirName: isRoot ? "Uncategorized" : dir.name,
+        name: isRoot ? "Uncategorized" : (meta.name ?? dir.name),
         meta,
         thumb,
         images,
         handle: dir,
       };
     },
-    [rootDir],
+    [convertAllHEIC],
   );
 
   const loadPhotos = useCallback(
@@ -405,6 +477,7 @@ export default function PhotoGallery(): React.ReactElement {
           const file = await handle.getFile();
           const meta = await MetadataManager.readFileMeta(album.handle, name);
           if (!meta.width || !meta.height) {
+            if (!file.type.startsWith("image/")) return;
             const { w, h } = await loadImageDims(file);
             meta.width = w;
             meta.height = h;
@@ -426,6 +499,7 @@ export default function PhotoGallery(): React.ReactElement {
             () => undefined,
           );
         }
+
         entries.push({
           file,
           url: URL.createObjectURL(file),
@@ -440,39 +514,51 @@ export default function PhotoGallery(): React.ReactElement {
 
   const refreshAlbums = useCallback(
     async (root: FileSystemDirectoryHandle): Promise<void> => {
+      if (refreshMutex.current) return;
+      refreshMutex.current = true;
+      if (!albumsReady && albumLoadingStatus !== "Loading albums...") {
+        setAlbumLoadingStatus("Loading albums...");
+      }
       const list: Album[] = [];
       for await (const [, entry] of root.entries())
         if (entry.kind === "directory")
           list.push(await loadAlbum(entry as FileSystemDirectoryHandle));
-      list.unshift(await loadAlbum(null));
+      list.unshift(await loadAlbum(root, true));
       list.forEach((album) => {
-        if (albums.some((a) => a.dirName === album.dirName)) {
-          const existing = albums.find((a) => a.dirName === album.dirName);
-          if (
-            existing &&
-            (existing.images.some((img) => !album.images.includes(img)) ||
-              album.images.some((img) => !existing.images.includes(img)))
-          ) {
-            loadPhotos(album)
-              .then((newPhotos) => {
-                if (active === album.dirName) {
-                  setPhotos((prev) => {
-                    return [
-                      ...prev.filter((p) =>
-                        newPhotos.some((n) => n.file.name === p.file.name),
-                      ),
-                      ...newPhotos.filter(
-                        (n) => !prev.some((p) => p.file.name === n.file.name),
-                      ),
-                    ];
-                  });
-                }
-              })
-              .catch(() => undefined);
-          }
-        } else {
+        const existing = albums.find((a) => a.dirName === album.dirName);
+        if (!existing) {
           setAlbums((prev) => [...prev, album]);
+          return;
         }
+
+        if (
+          !existing.images.some((img) => !album.images.includes(img)) &&
+          !album.images.some((img) => !existing.images.includes(img))
+        )
+          return;
+
+        loadPhotos(album)
+          .then((newPhotos) => {
+            if (active === album.dirName) {
+              photos
+                .filter(
+                  (p) => !newPhotos.some((n) => n.file.name === p.file.name),
+                )
+                .forEach((p) => URL.revokeObjectURL(p.url));
+
+              setPhotos((prev) => {
+                return [
+                  ...prev.filter((p) =>
+                    newPhotos.some((n) => n.file.name === p.file.name),
+                  ),
+                  ...newPhotos.filter(
+                    (n) => !prev.some((p) => p.file.name === n.file.name),
+                  ),
+                ];
+              });
+            }
+          })
+          .catch(() => undefined);
       });
       albums.forEach((album) => {
         if (!list.some((a) => a.dirName === album.dirName)) {
@@ -481,22 +567,40 @@ export default function PhotoGallery(): React.ReactElement {
       });
       if (!active && list.length)
         setActive(list?.[0]?.dirName ?? UNCATEGORIZED_KEY);
+
+      if (!albumsReady) {
+        setAlbumsReady(true);
+        setAlbumLoadingStatus("");
+      }
+      refreshMutex.current = false;
     },
-    [active, loadAlbum, setAlbums, setActive, albums, loadPhotos],
+    [
+      active,
+      loadAlbum,
+      setAlbums,
+      setActive,
+      albums,
+      loadPhotos,
+      photos,
+      albumsReady,
+      albumLoadingStatus,
+    ],
   );
 
   useEffect(() => {
     if (!rootDir) return;
-    const id = window.setInterval(() => {
-      refreshAlbums(rootDir).catch(() => undefined);
-    }, 2000);
-    return () => window.clearInterval(id);
+    const id = setInterval(() => void refreshAlbums(rootDir), 2000);
+    return () => clearInterval(id);
   }, [rootDir, refreshAlbums]);
 
   const pickDirectory = async (): Promise<void> => {
     const dir = await window.showDirectoryPicker();
     setRootDir(dir);
-    await refreshAlbums(dir);
+    setAlbumsReady(false);
+    setAlbumLoadingStatus("");
+    setTimeout(() => {
+      void refreshAlbums(dir);
+    }, 1);
   };
 
   const createAlbum = async (): Promise<void> => {
@@ -689,8 +793,12 @@ export default function PhotoGallery(): React.ReactElement {
     target: Album,
     imgs: ImageEntry[],
   ): Promise<void> => {
+    const discarded: ImageEntry[] = [];
     for (const img of imgs) {
-      if (target.images.some((i) => i === img.file.name)) continue;
+      if (target.images.some((i) => i === img.file.name)) {
+        discarded.push(img);
+        continue;
+      }
       const srcFile = await img.handle.getFile();
       const targetHandle = await target.handle.getFileHandle(img.file.name, {
         create: true,
@@ -705,8 +813,19 @@ export default function PhotoGallery(): React.ReactElement {
       }
       target.images.push(img.file.name);
     }
+    photos
+      .filter(
+        (p) =>
+          imgs.some((i) => i.file.name === p.file.name) &&
+          !discarded.some((i) => i.file.name === p.file.name),
+      )
+      .forEach((p) => URL.revokeObjectURL(p.url));
     setPhotos((prev) =>
-      prev.filter((p) => !imgs.some((i) => i.file.name === p.file.name)),
+      prev.filter(
+        (p) =>
+          discarded.some((i) => i.file.name === p.file.name) ||
+          !imgs.some((i) => i.file.name === p.file.name),
+      ),
     );
     setSelection(new Set());
   };
@@ -949,9 +1068,11 @@ export default function PhotoGallery(): React.ReactElement {
       onDragOver={(e) => e.preventDefault()}
     >
       <div className="border-border bg-background/95 w-64 space-y-3 border-r p-4">
-        <Button onClick={pickDirectory} className="w-full">
-          <FolderOpen className="h-4 w-4" /> Choose Directory
-        </Button>
+        {!rootDir && (
+          <Button onClick={pickDirectory} className="w-full">
+            <FolderOpen className="h-4 w-4" /> Choose Directory
+          </Button>
+        )}
         <Popover open={albumDialogOpen} onOpenChange={setAlbumDialogOpen}>
           <PopoverTrigger asChild>
             <Button
@@ -978,12 +1099,18 @@ export default function PhotoGallery(): React.ReactElement {
             </div>
           </PopoverContent>
         </Popover>
+        {rootDir && !albumsReady && (
+          <div className="text-muted-foreground flex w-full items-center justify-center gap-2 text-sm">
+            <Loader2 className="text-muted-foreground h-6 w-6 animate-spin" />
+            {albumLoadingStatus}
+          </div>
+        )}
         <ScrollArea
-          className="h-[calc(100vh-8rem)] p-2"
+          className="h-[calc(100vh-6rem)] p-2"
           onDragLeave={clearAlbumHighlight}
         >
           <AnimatePresence>
-            {albums.map((album) => (
+            {sortedAlbums.map((album) => (
               <AlbumItem
                 key={album.dirName}
                 album={album}
