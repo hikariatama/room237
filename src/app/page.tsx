@@ -234,9 +234,6 @@ const MasonryImage: React.FC<MasonryImageProps> = ({
             muted
             loop
             playsInline
-            onError={(e) =>
-              console.error("💥 video error:", e.currentTarget.error)
-            }
           >
             <source src={img.url} type={img.file.type || "video/mp4"} />
             Your browser does not support the video tag.
@@ -1391,11 +1388,32 @@ export default function PhotoGallery(): React.ReactElement {
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/90"
             onClick={() => setViewerIndex(null)}
           >
-            <img
-              src={sortedFilteredImgs?.[viewerIndex]?.url ?? ""}
-              className="max-h-full max-w-full object-contain"
-              alt="viewer"
-            />
+            {sortedFilteredImgs?.[viewerIndex]?.file.type.startsWith(
+              "video",
+            ) ? (
+              <video
+                className="block w-full cursor-pointer select-none"
+                controls
+                muted
+                loop
+                playsInline
+              >
+                <source
+                  src={sortedFilteredImgs?.[viewerIndex]?.url}
+                  type={
+                    sortedFilteredImgs?.[viewerIndex]?.file.type || "video/mp4"
+                  }
+                />
+                Your browser does not support the video tag.
+              </video>
+            ) : (
+              <img
+                src={sortedFilteredImgs?.[viewerIndex]?.url}
+                alt={sortedFilteredImgs?.[viewerIndex]?.file.name}
+                className="block w-full cursor-pointer select-none"
+              />
+            )}
+
             <Button
               variant="ghost"
               size="icon"
