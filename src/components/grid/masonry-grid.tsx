@@ -42,6 +42,19 @@ export default function MasonryGrid() {
     e.dataTransfer.dropEffect = "copy";
   };
 
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      e.preventDefault();
+      if (e.clipboardData?.files.length) {
+        void uploadFilesToActive(e.clipboardData.files);
+      }
+    };
+    document.addEventListener("paste", handlePaste);
+    return () => {
+      document.removeEventListener("paste", handlePaste);
+    };
+  }, [uploadFilesToActive]);
+
   return (
     <div
       className="grid gap-4"
