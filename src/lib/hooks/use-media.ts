@@ -42,7 +42,28 @@ export function useMedia(
     }
   };
 
+  const reloadThumb = useCallback(
+    async (entry: MediaEntry) => {
+      const thumbDir = await album?.handle.getDirectoryHandle(
+        ".room237-thumb",
+        { create: true },
+      );
+      if (!thumbDir) return;
+      const thumbHandle = await thumbDir.getFileHandle(
+        `${entry.file.name.replace(/\.[^.]+$/, "")}.avif`,
+        { create: true },
+      );
+      const thumbBlob = await imgThumb(entry.file);
+      const thumbWritable = await thumbHandle.createWritable();
+      await thumbWritable.write(thumbBlob);
+      await thumbWritable.close();
+      entry.thumb = URL.createObjectURL(thumbBlob);
+    },
+    [album],
+  );
+
   const loadInitial = useCallback(async () => {
+    const intervals: NodeJS.Timeout[] = [];
     if (!album) {
       setAll([]);
       setVisible([]);
@@ -109,6 +130,17 @@ export function useMedia(
 
       const thumbUrl = URL.createObjectURL(thumbBlob);
 
+      intervals.push(
+        setInterval(
+          () => {
+            if (document.visibilityState === "visible") {
+              void reloadThumb(entries.find((e) => e.file.name === n)!);
+            }
+          },
+          Math.floor(Math.random() * 30000 + 60000),
+        ),
+      );
+
       entries.push({
         file,
         meta,
@@ -133,7 +165,13 @@ export function useMedia(
     }
     setAll(entries);
     setVisible(entries.slice(0, batch));
-  }, [album, batch]);
+
+    return () => {
+      intervals.forEach((i) => clearInterval(i));
+      entries.forEach((e) => e.unload());
+      urlCache.current.clear();
+    };
+  }, [album, batch, reloadThumb]);
 
   useEffect(() => {
     void loadInitial();
