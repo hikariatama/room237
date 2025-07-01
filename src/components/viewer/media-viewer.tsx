@@ -39,7 +39,7 @@ export default function MediaViewer() {
       <VisuallyHidden>
         <DialogTitle>{item.file.name}</DialogTitle>
       </VisuallyHidden>
-      <DialogContent className="flex justify-center overflow-hidden bg-black p-0">
+      <DialogContent className="flex w-fit !max-w-[90vw] justify-center overflow-hidden bg-black p-0">
         {item.file.type.startsWith("video") ? (
           <video
             src={item.url()}

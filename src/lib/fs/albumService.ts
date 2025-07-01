@@ -1,5 +1,5 @@
 import { MetadataManager } from "@/lib/metadata-manager";
-import { isImage } from "@/lib/utils";
+import { isImage, isMedia } from "@/lib/utils";
 import type { Album, MediaEntry } from "@/lib/types";
 import { ensureDirectoryHasNoHeic } from "./imageService";
 
@@ -15,7 +15,7 @@ async function buildAlbum(
   }
   const images: string[] = [];
   for await (const [name, h] of dir.entries())
-    if (h.kind === "file" && isImage(name)) images.push(name);
+    if (h.kind === "file" && isMedia(name)) images.push(name);
 
   let thumb: string | null = null;
   try {

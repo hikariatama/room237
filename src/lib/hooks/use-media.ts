@@ -72,7 +72,7 @@ export function useMedia(
       meta.added ??= file.lastModified;
       if (!meta.shoot && file.type.startsWith("image"))
         meta.shoot = (await exifDate(file)) ?? meta.added;
-      if (!meta.width || !meta.height) {
+      if ((!meta.width || !meta.height) && file.type.startsWith("image")) {
         const { w, h } = await loadImageDims(file);
         meta = { ...meta, width: w, height: h };
       }
@@ -92,7 +92,6 @@ export function useMedia(
       try {
         if (!thumbBlob) {
           thumbBlob = await imgThumb(file);
-          console.log(thumbBlob);
           const thumbHandle = await thumbDir.getFileHandle(
             `${n.replace(/\.[^.]+$/, "")}.avif`,
             { create: true },

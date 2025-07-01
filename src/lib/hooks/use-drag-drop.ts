@@ -6,7 +6,10 @@ import { createStackPreview, animateFly } from "../utils";
 
 export function useDragDrop(selection: Set<MediaEntry>) {
   const dragRef = useRef<{ medias: MediaEntry[] } | null>(null);
-  const onDragStart = (e: MouseEvent | TouchEvent | PointerEvent | React.DragEvent<Element>, media: MediaEntry) => {
+  const onDragStart = (
+    e: MouseEvent | TouchEvent | PointerEvent | React.DragEvent<Element>,
+    media: MediaEntry,
+  ) => {
     const medias = selection.has(media) ? Array.from(selection) : [media];
     dragRef.current = { medias: medias };
     const sp = createStackPreview(medias);

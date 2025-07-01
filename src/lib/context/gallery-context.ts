@@ -32,7 +32,10 @@ type Ctx = {
     next: () => void;
     prev: () => void;
   };
-  onDragStart: (e: MouseEvent | TouchEvent | PointerEvent | React.DragEvent<Element>, i: MediaEntry) => void;
+  onDragStart: (
+    e: MouseEvent | TouchEvent | PointerEvent | React.DragEvent<Element>,
+    i: MediaEntry,
+  ) => void;
   getDragged: () => MediaEntry[];
   addFilesToAlbum: (a: Album, f: FileList | File[]) => Promise<void>;
   uploadFilesToActive: (f: FileList | File[]) => Promise<void>;

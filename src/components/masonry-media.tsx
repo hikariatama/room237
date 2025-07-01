@@ -101,7 +101,7 @@ export const MasonryMedia: React.FC<Props> = ({
               className="block w-full cursor-pointer select-none"
               onClick={click}
             />
-            <Play className="absolute top-1/2 left-1/2 h-8 w-8 -translate-x-1/2 -translate-y-1/2 text-white/80" />
+            <Play className="pointer-events-none absolute top-1/2 left-1/2 h-8 w-8 -translate-x-1/2 -translate-y-1/2 text-white/80" />
           </>
         ) : (
           <img
@@ -112,7 +112,7 @@ export const MasonryMedia: React.FC<Props> = ({
           />
         )}
 
-        <div className="absolute bottom-0 flex w-full items-end justify-between p-2 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+        <div className="pointer-events-none absolute bottom-0 flex w-full items-end justify-between p-2 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
           <div className="text-foreground rounded-md bg-black/70 px-2 py-0.5 text-xs backdrop-blur-lg">
             {item.meta.shoot || item.meta.added
               ? new Date(
@@ -124,7 +124,7 @@ export const MasonryMedia: React.FC<Props> = ({
                 })
               : "Unknown Date"}
           </div>
-          <div className="flex gap-1">
+          <div className="pointer-events-auto flex gap-1">
             <motion.button
               whileHover={{ scale: 1.1 }}
               whileTap={{ scale: 0.9 }}
@@ -137,28 +137,30 @@ export const MasonryMedia: React.FC<Props> = ({
             >
               <Trash2 className="h-4 w-4" />
             </motion.button>
-            <motion.button
-              whileHover={copying ? {} : { scale: 1.1 }}
-              whileTap={copying ? {} : { scale: 0.9 }}
-              transition={{ type: "spring", stiffness: 500, damping: 25 }}
-              className="bg-background/70 flex h-7 w-7 items-center justify-center rounded-md backdrop-blur-sm"
-              onClick={async (e) => {
-                e.stopPropagation();
-                setCopying(true);
-                try {
-                  await copyFile();
-                } finally {
-                  setCopying(false);
-                }
-              }}
-              disabled={copying}
-            >
-              {copying ? (
-                <Loader2 className="text-muted-foreground size-4 animate-spin" />
-              ) : (
-                <ClipboardCopy className="size-4" />
-              )}
-            </motion.button>
+            {item.file.type.startsWith("image/") && (
+              <motion.button
+                whileHover={copying ? {} : { scale: 1.1 }}
+                whileTap={copying ? {} : { scale: 0.9 }}
+                transition={{ type: "spring", stiffness: 500, damping: 25 }}
+                className="bg-background/70 flex h-7 w-7 items-center justify-center rounded-md backdrop-blur-sm"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  setCopying(true);
+                  try {
+                    await copyFile();
+                  } finally {
+                    setCopying(false);
+                  }
+                }}
+                disabled={copying}
+              >
+                {copying ? (
+                  <Loader2 className="text-muted-foreground size-4 animate-spin" />
+                ) : (
+                  <ClipboardCopy className="size-4" />
+                )}
+              </motion.button>
+            )}
           </div>
         </div>
       </div>

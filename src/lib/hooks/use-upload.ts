@@ -32,7 +32,49 @@ const makeAvif = async (bmp: CanvasImageSource): Promise<Blob> => {
   return c.convertToBlob({ type: "image/avif", quality: 0.4 });
 };
 
-export const imgThumb = async (f: File) => makeAvif(await createImageBitmap(f));
+const makeVideoThumb = async (f: File): Promise<Blob> => {
+  const v = document.createElement("video");
+  v.src = URL.createObjectURL(f);
+  await new Promise<void>((resolve, reject) => {
+    v.onloadedmetadata = () => resolve();
+    v.onerror = reject;
+  });
+  v.currentTime = Math.min(10, v.duration * Math.random());
+  await new Promise((resolve, reject) => {
+    v.onseeked = resolve;
+    v.onerror = reject;
+  });
+  v.pause();
+  const size = 400;
+  const { videoWidth: width, videoHeight: height } = v;
+  const aspectRatio = width / height;
+  let newWidth: number;
+  let newHeight: number;
+  if (width < height) {
+    newWidth = size;
+    newHeight = size / aspectRatio;
+  } else {
+    newHeight = size;
+    newWidth = size * aspectRatio;
+  }
+  const c = new OffscreenCanvas(newWidth, newHeight);
+  const ctx = c.getContext("2d")!;
+  ctx.drawImage(v, 0, 0, newWidth, newHeight);
+  const blob = await c.convertToBlob({ type: "image/avif", quality: 0.4 });
+  URL.revokeObjectURL(v.src);
+  return blob;
+};
+
+export const imgThumb = async (f: File) => {
+  if (f.type.startsWith("image")) {
+    return await makeAvif(await createImageBitmap(f));
+  }
+  if (f.type.startsWith("video")) {
+    return await makeVideoThumb(f);
+  }
+  throw new Error("Unsupported file type for thumbnail generation");
+};
+
 const videoThumb = async (f: File) => {
   const v = document.createElement("video");
   v.src = URL.createObjectURL(f);
