@@ -6,7 +6,7 @@ import { createStackPreview, animateFly } from "../utils";
 
 export function useDragDrop(selection: Set<MediaEntry>) {
   const dragRef = useRef<{ medias: MediaEntry[] } | null>(null);
-  const onDragStart = (e: DragEvent | React.DragEvent, media: MediaEntry) => {
+  const onDragStart = (e: MouseEvent | TouchEvent | PointerEvent | React.DragEvent<Element>, media: MediaEntry) => {
     const medias = selection.has(media) ? Array.from(selection) : [media];
     dragRef.current = { medias: medias };
     const sp = createStackPreview(medias);
@@ -15,6 +15,7 @@ export function useDragDrop(selection: Set<MediaEntry>) {
     sp.style.left = "-9999px";
     document.body.appendChild(sp);
     const r = sp.getBoundingClientRect();
+    if (e instanceof MouseEvent || e instanceof TouchEvent) return;
     e.dataTransfer?.setDragImage(sp, r.width / 2, r.height / 2);
     requestAnimationFrame(() => sp.remove());
     const rects = medias.map((i) =>
