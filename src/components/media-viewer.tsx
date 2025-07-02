@@ -7,7 +7,7 @@ import { type MediaEntry } from "@/lib/types";
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 import { useEffect, useRef, useState } from "react";
 import ReactCrop, { type PercentCrop } from "react-image-crop";
-import { Button } from "../ui/button";
+import { Button } from "./ui/button";
 import { imgThumb } from "@/lib/hooks/use-upload";
 import { cn } from "@/lib/utils";
 

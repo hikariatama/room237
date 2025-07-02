@@ -29,7 +29,7 @@ interface Props {
   style?: React.CSSProperties;
 }
 
-export const MasonryMedia: React.FC<Props> = ({
+export const MediaItem: React.FC<Props> = ({
   item,
   selected,
   onSelectToggle,

@@ -3,11 +3,11 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useGallery } from "@/lib/context/gallery-context";
 import { masonry } from "@/lib/utils";
-import { MasonryMedia } from "@/components/masonry-media";
+import { MediaItem } from "@/components/media-item";
 
 const MAX_COLS = 12;
 
-export default function MasonryGrid() {
+export default function MediaGrid() {
   const {
     media,
     selection,
@@ -70,7 +70,7 @@ export default function MasonryGrid() {
         onDrop={drop}
       >
         {media.map((img) => (
-          <MasonryMedia
+          <MediaItem
             key={img.file.name}
             item={img}
             selected={selection.has(img)}
@@ -108,7 +108,7 @@ export default function MasonryGrid() {
             onDrop={drop}
           >
             {col.map((img) => (
-              <MasonryMedia
+              <MediaItem
                 key={img.file.name}
                 item={img}
                 selected={selection.has(img)}
@@ -144,7 +144,7 @@ export default function MasonryGrid() {
       >
         {media.map((img) => (
           <div key={img.file.name} className="flex items-center justify-center">
-            <MasonryMedia
+            <MediaItem
               item={img}
               selected={selection.has(img)}
               onSelectToggle={toggleSelect}

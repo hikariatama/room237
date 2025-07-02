@@ -3,9 +3,9 @@
 import AppShell from "@/components/app-shell";
 import DirectoryPicker from "@/components/sidebar/directory-picker";
 import AlbumList from "@/components/sidebar/album-list";
-import MasonryGrid from "@/components/grid/masonry-grid";
+import MediaGrid from "@/components/media-grid";
 import MediaGridHeader from "@/components/ui/media-grid-header";
-import MediaViewer from "@/components/viewer/media-viewer";
+import MediaViewer from "@/components/media-viewer";
 import { GalleryProvider } from "@/lib/context/gallery-provider";
 import { Toaster } from "sonner";
 import { SelectionMenu } from "@/components/selection-menu";
@@ -20,7 +20,7 @@ export default function GalleryPage() {
         </div>
         <div className="h-screen flex-1 overflow-y-auto p-4">
           <MediaGridHeader />
-          <MasonryGrid />
+          <MediaGrid />
         </div>
         <MediaViewer />
         <Toaster theme="dark" />
