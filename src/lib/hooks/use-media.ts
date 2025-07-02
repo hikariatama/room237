@@ -28,7 +28,7 @@ export function useMedia(
   sortDir: SortDir,
 ) {
   const [all, setAll] = useState<MediaEntry[]>([]);
-  const [visible, setVisible] = useState<MediaEntry[]>([]);
+  const [visibleCount, setVisibleCount] = useState<number>(30);
   const [layout, setLayoutInternal] = useState<LayoutType>("default");
   const urlCache = useRef(new Map<string, string>());
 
@@ -58,7 +58,7 @@ export function useMedia(
   const loadInitial = useCallback(async () => {
     if (!album) {
       setAll([]);
-      setVisible([]);
+      setVisibleCount(30);
       return;
     }
     const entries: MediaEntry[] = [];
@@ -147,7 +147,7 @@ export function useMedia(
       });
     }
     setAll(entries);
-    setVisible(entries.slice(0, batch));
+    setVisibleCount(Math.min(entries.length, batch));
   }, [album, batch]);
 
   useEffect(() => {
@@ -155,21 +155,24 @@ export function useMedia(
   }, [loadInitial]);
 
   const loadMore = () =>
-    setVisible((p) => all.slice(0, Math.min(all.length, p.length + batch)));
+    setVisibleCount((p) => {
+      const newCount = p + batch;
+      if (newCount >= all.length) return all.length;
+      return newCount;
+    });
 
   const sorted = useMemo(() => {
-    const arr = [...visible];
+    const arr = [...all];
     arr.sort((a, b) => cmp(a, b, sortKey));
     if (sortDir === "desc") arr.reverse();
-    return arr;
-  }, [visible, sortKey, sortDir]);
+    return arr.slice(0, visibleCount);
+  }, [visibleCount, all, sortKey, sortDir]);
 
   const addEntry = (e: MediaEntry) =>
     setAll((p) => (p.some((i) => i.file.name === e.file.name) ? p : [e, ...p]));
   const removeEntry = (e: MediaEntry) => {
     urlCache.current.delete(e.file.name);
     setAll((p) => p.filter((i) => i.file.name !== e.file.name));
-    setVisible((p) => p.filter((i) => i.file.name !== e.file.name));
   };
 
   return { media: sorted, loadMore, addEntry, removeEntry, layout, setLayout };

@@ -89,6 +89,13 @@ export default function MediaGrid() {
             }}
           />
         ))}
+        <div
+          className="col-span-full"
+          ref={(el) => {
+            if (el) sent.current[0] = el;
+          }}
+          style={{ height: 1 }}
+        />
       </div>
     );
 
@@ -159,6 +166,13 @@ export default function MediaGrid() {
             />
           </div>
         ))}
+        <div
+          className="col-span-full"
+          ref={(el) => {
+            if (el) sent.current[0] = el;
+          }}
+          style={{ height: 1 }}
+        />
       </div>
     );
 }
