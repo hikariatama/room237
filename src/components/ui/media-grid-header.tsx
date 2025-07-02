@@ -9,7 +9,14 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { useGallery, type SortKey } from "@/lib/context/gallery-context";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowDownAZ, ArrowUpAZ, Trash2 } from "lucide-react";
+import {
+  ArrowDownAZ,
+  ArrowUpAZ,
+  FoldVertical,
+  Grid2X2,
+  TableCellsSplit,
+  Trash2,
+} from "lucide-react";
 import { DynamicIcon, type IconName } from "lucide-react/dynamic";
 import { useState } from "react";
 import {
@@ -46,6 +53,8 @@ export default function MediaGridHeader() {
     activeAlbum,
     deleteAlbum,
     rootDir,
+    layout,
+    setLayout,
   } = useGallery();
 
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -57,6 +66,23 @@ export default function MediaGridHeader() {
   return (
     <div className="mb-3 flex items-center justify-between">
       <div className="flex items-center gap-2">
+        <Button
+          variant="outline"
+          onClick={() => {
+            const layouts = ["default", "masonry", "apple"] as const;
+            const currentIndex = layouts.indexOf(layout);
+            const nextIndex = (currentIndex + 1) % layouts.length;
+            setLayout(layouts[nextIndex]!);
+          }}
+          className="cursor-pointer"
+        >
+          {layout === "default" && <Grid2X2 />}
+          {layout === "masonry" && <TableCellsSplit className="rotate-90" />}
+          {layout === "apple" && <FoldVertical />}
+          {layout === "default" && "Grid"}
+          {layout === "masonry" && "Masonry"}
+          {layout === "apple" && "Apple-Style"}
+        </Button>
         <Select
           value={sortKey}
           onValueChange={(value) => setSortKey(value as SortKey)}
@@ -83,7 +109,7 @@ export default function MediaGridHeader() {
           <Slider
             value={[columns]}
             min={2}
-            max={8}
+            max={12}
             step={1}
             onValueChange={(v) => {
               if (v[0]) setColumns(v[0]);

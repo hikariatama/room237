@@ -23,3 +23,5 @@ export interface Album {
   images: string[];
   handle: FileSystemDirectoryHandle;
 }
+
+export type LayoutType = "default" | "masonry" | "apple";

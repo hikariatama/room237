@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Album, MediaEntry } from "@/lib/types";
+import type { Album, LayoutType, MediaEntry } from "@/lib/types";
 import { loadImageDims } from "@/lib/utils";
 import * as exifr from "exifr";
 import { imgThumb } from "./use-upload";
@@ -29,7 +29,20 @@ export function useMedia(
 ) {
   const [all, setAll] = useState<MediaEntry[]>([]);
   const [visible, setVisible] = useState<MediaEntry[]>([]);
+  const [layout, setLayoutInternal] = useState<LayoutType>("default");
   const urlCache = useRef(new Map<string, string>());
+
+  const setLayout = useCallback((l: LayoutType) => {
+    setLayoutInternal(l);
+    localStorage.setItem("room237-layout", l);
+  }, []);
+
+  useEffect(() => {
+    const storedLayout = localStorage.getItem("room237-layout");
+    if (storedLayout) {
+      setLayoutInternal(storedLayout as LayoutType);
+    }
+  }, []);
 
   const exifDate = async (f: File): Promise<number | null> => {
     try {
@@ -159,5 +172,5 @@ export function useMedia(
     setVisible((p) => p.filter((i) => i.file.name !== e.file.name));
   };
 
-  return { media: sorted, loadMore, addEntry, removeEntry };
+  return { media: sorted, loadMore, addEntry, removeEntry, layout, setLayout };
 }

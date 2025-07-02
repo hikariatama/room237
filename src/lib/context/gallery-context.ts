@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext } from "react";
-import type { Album, MediaEntry } from "@/lib/types";
+import type { Album, LayoutType, MediaEntry } from "@/lib/types";
 
 export type SortKey = "shoot" | "added" | "name";
 export type SortDir = "asc" | "desc";
@@ -45,6 +45,8 @@ type Ctx = {
   moveMediasToAlbum: (t: Album, medias: MediaEntry[]) => Promise<void>;
   moveSelectedToAlbum: (t: Album) => Promise<void>;
   locked: boolean;
+  layout: LayoutType;
+  setLayout: (l: LayoutType) => void;
 };
 
 export const GalleryContext = createContext<Ctx>(null as unknown as Ctx);

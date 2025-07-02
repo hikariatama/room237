@@ -124,6 +124,8 @@ export function GalleryProvider({ children }: { children: ReactNode }) {
     moveMediasToAlbum,
     moveSelectedToAlbum,
     locked: lock.locked,
+    layout: photosState.layout,
+    setLayout: photosState.setLayout,
   };
 
   return (
