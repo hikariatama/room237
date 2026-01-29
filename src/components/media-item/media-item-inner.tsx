@@ -55,11 +55,11 @@ export const MediaItemInner = memo(function MediaItemInner({
     [columns],
   );
 
-  const [deferredExtrasOpen, setDeferredExtrasOpen] = useState(false);
+  const [deferredExtrasMounted, setDeferredExtrasMounted] = useState(false);
 
   useEffect(() => {
     const id = requestIdle(() => {
-      startTransition(() => setDeferredExtrasOpen(true));
+      startTransition(() => setDeferredExtrasMounted(true));
     });
     return () => cancelIdle(id);
   }, []);
@@ -89,7 +89,7 @@ export const MediaItemInner = memo(function MediaItemInner({
       onDragEnd={clear}
       style={itemStyle}
     >
-      {deferredExtrasOpen && showExtras && (
+      {deferredExtrasMounted && showExtras && (
         <MediaExtras mediaPath={mediaPath} />
       )}
 

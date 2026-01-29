@@ -7,16 +7,15 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { FAVORITES_ALBUM_ID } from "@/lib/consts";
-import { useActiveAlbum } from "@/lib/hooks/use-active-album";
+import { useI18n } from "@/lib/i18n";
 import { useRoom237 } from "@/lib/stores";
 import { cn } from "@/lib/utils";
-import { AnimatePresence, motion } from "framer-motion";
 import { IconStack2, IconTrash } from "@tabler/icons-react";
+import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
-import { useI18n } from "@/lib/i18n";
+import { useStoreWithEqualityFn } from "zustand/traditional";
 
 export function AlbumActions() {
-  const activeAlbum = useActiveAlbum();
   const duplicatesAvailable = useRoom237((state) => state.duplicatesAvailable);
   const duplicatesLoading = useRoom237((state) => state.duplicatesLoading);
   const showDuplicates = useRoom237((state) => state.showDuplicates);
@@ -25,9 +24,37 @@ export function AlbumActions() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const { t } = useI18n();
 
-  const activeAlbumIsFavorites = activeAlbum?.path === FAVORITES_ALBUM_ID;
+  const activeAlbum = useStoreWithEqualityFn(
+    useRoom237,
+    (state) => {
+      if (!state.activeAlbumId) return null;
 
-  if (!activeAlbum || activeAlbumIsFavorites) {
+      if (
+        state.activeAlbumId === "Favorites" ||
+        state.activeAlbumId === FAVORITES_ALBUM_ID
+      ) {
+        return state.favoritesAlbum
+          ? {
+              id: state.favoritesAlbum.albumId,
+              name: state.favoritesAlbum.name,
+              favorite: true,
+            }
+          : null;
+      }
+
+      return state.albumsById[state.activeAlbumId]
+        ? {
+            id: state.albumsById[state.activeAlbumId]!.albumId,
+            name: state.albumsById[state.activeAlbumId]!.name,
+            favorite: false,
+          }
+        : null;
+    },
+    (a, b) =>
+      a?.id === b?.id && a?.name === b?.name && a?.favorite === b?.favorite,
+  );
+
+  if (!activeAlbum || activeAlbum.favorite) {
     return null;
   }
 
@@ -136,7 +163,10 @@ export function AlbumActions() {
             <div className="flex gap-2">
               <Button
                 variant="destructive"
-                onClick={() => activeAlbum && deleteAlbum(activeAlbum)}
+                onClick={() => {
+                  if (!activeAlbum) return;
+                  void deleteAlbum(activeAlbum.id);
+                }}
                 className="flex-auto"
               >
                 <IconTrash className="text-red-500" />

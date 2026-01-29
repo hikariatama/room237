@@ -252,7 +252,7 @@ export function clampAdvancedSettings(
       defaultAdvancedSettings.preload.thumbWorkers,
     ),
     1,
-    8,
+    32,
   );
   merged.preload.metaWorkers = clamp(
     coerceNumber(
@@ -260,7 +260,7 @@ export function clampAdvancedSettings(
       defaultAdvancedSettings.preload.metaWorkers,
     ),
     1,
-    8,
+    32,
   );
   merged.preload.hashWorkers = clamp(
     coerceNumber(
@@ -268,7 +268,7 @@ export function clampAdvancedSettings(
       defaultAdvancedSettings.preload.hashWorkers,
     ),
     1,
-    8,
+    32,
   );
   merged.preload.progressEmitMs = clamp(
     coerceNumber(
@@ -306,10 +306,17 @@ export function clampAdvancedSettings(
   );
 
   merged.privacy.enabled = Boolean(merged.privacy.enabled);
-  merged.privacy.lockscreenEnabled = Boolean(merged.privacy.lockscreenEnabled);
-  merged.privacy.confirmOpenEnabled = Boolean(
-    merged.privacy.confirmOpenEnabled,
-  );
+  if (merged.privacy.enabled) {
+    merged.privacy.lockscreenEnabled = true;
+    merged.privacy.confirmOpenEnabled = true;
+  } else {
+    merged.privacy.lockscreenEnabled = Boolean(
+      merged.privacy.lockscreenEnabled,
+    );
+    merged.privacy.confirmOpenEnabled = Boolean(
+      merged.privacy.confirmOpenEnabled,
+    );
+  }
 
   return merged;
 }

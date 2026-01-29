@@ -278,9 +278,9 @@ impl Default for PreloadSettings {
 impl PreloadSettings {
     fn clamp(self) -> Self {
         Self {
-            thumb_workers: self.thumb_workers.clamp(1, 8),
-            meta_workers: self.meta_workers.clamp(1, 8),
-            hash_workers: self.hash_workers.clamp(1, 8),
+            thumb_workers: self.thumb_workers.clamp(1, 32),
+            meta_workers: self.meta_workers.clamp(1, 32),
+            hash_workers: self.hash_workers.clamp(1, 32),
             progress_emit_ms: self.progress_emit_ms.clamp(50, 1000),
             thumb_hash_queue_delay_ms: self.thumb_hash_queue_delay_ms.clamp(0, 100),
             thumb_hash_only_after_idle: self.thumb_hash_only_after_idle,
@@ -363,10 +363,15 @@ impl Default for PrivacySettings {
 
 impl PrivacySettings {
     fn clamp(self) -> Self {
+        let (lockscreen_enabled, confirm_open_enabled) = if self.enabled {
+            (true, true)
+        } else {
+            (self.lockscreen_enabled, self.confirm_open_enabled)
+        };
         Self {
             enabled: self.enabled,
-            lockscreen_enabled: self.lockscreen_enabled,
-            confirm_open_enabled: self.confirm_open_enabled,
+            lockscreen_enabled,
+            confirm_open_enabled,
         }
     }
 }

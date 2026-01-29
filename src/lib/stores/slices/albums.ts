@@ -130,12 +130,16 @@ export const albumsSlice: CustomStateCreator<AlbumsSlice> = (set, get) => ({
     }),
   setActiveAlbumId: (activeAlbumId) => set({ activeAlbumId }),
   setLoadingAlbumId: (id) => set({ loadingAlbumId: id }),
-  isAlbumLoaded: (album) => {
+  isAlbumLoaded: (albumId) => {
+    const album = get().albumsById[albumId];
+    if (!album) return false;
     const medias = get().albumMediasByPath[album.path];
     return Array.isArray(medias) && medias.length === album.size;
   },
 
-  loadAlbumMedia: async (album, options) => {
+  loadAlbumMedia: async (albumId, options) => {
+    const album = get().albumsById[albumId];
+    if (!album) return [];
     const path = album.path;
     const existing = get().albumMediasByPath[path];
     if (!options?.force && existing?.length === album.size) {
@@ -182,7 +186,9 @@ export const albumsSlice: CustomStateCreator<AlbumsSlice> = (set, get) => ({
     }
   },
 
-  loadAlbumDuplicates: async (album, options) => {
+  loadAlbumDuplicates: async (albumId, options) => {
+    const album = get().albumsById[albumId];
+    if (!album) return [];
     const path = album.path;
     const existing = get().albumDuplicatesByPath[path];
     if (!options?.force && existing) {
@@ -195,7 +201,7 @@ export const albumsSlice: CustomStateCreator<AlbumsSlice> = (set, get) => ({
     }
 
     const task = (async () => {
-      await get().loadAlbumMedia(album, options);
+      await get().loadAlbumMedia(albumId, options);
       const duplicates = await fetchAlbumDuplicates(album);
       set((state) => ({
         albumDuplicatesByPath: {
@@ -275,8 +281,8 @@ export const albumsSlice: CustomStateCreator<AlbumsSlice> = (set, get) => ({
     const favoriteFilters = state.favoriteFilters;
     set({ favoritesOnly: favoriteFilters[album.albumId] ?? false });
 
-    if (!get().isAlbumLoaded(album)) {
-      await get().loadAlbumMedia(album);
+    if (!get().isAlbumLoaded(albumId)) {
+      await get().loadAlbumMedia(albumId);
 
       const currentState = get();
       if (currentState.activeAlbumId !== albumId) {
@@ -381,8 +387,8 @@ export const albumsSlice: CustomStateCreator<AlbumsSlice> = (set, get) => ({
         get().autoExpandAncestors(activeAlbumId);
         if (activeAlbumId !== FAVORITES_ALBUM_ID) {
           const activeAlbum = albumsById[activeAlbumId];
-          if (activeAlbum && !get().isAlbumLoaded(activeAlbum)) {
-            await get().loadAlbumMedia(activeAlbum);
+          if (activeAlbum && !get().isAlbumLoaded(activeAlbumId)) {
+            await get().loadAlbumMedia(activeAlbumId);
           }
         }
       }
@@ -403,7 +409,9 @@ export const albumsSlice: CustomStateCreator<AlbumsSlice> = (set, get) => ({
     await _createAlbum(parentPath, name);
   },
 
-  deleteAlbum: async (album: Album) => {
+  deleteAlbum: async (albumId: AlbumId) => {
+    const album = get().albumsById[albumId];
+    if (!album) return;
     const state = get();
     const rootDir =
       state.displayDecoy && state.decoyRoot ? state.decoyRoot : state.rootDir;
@@ -411,7 +419,9 @@ export const albumsSlice: CustomStateCreator<AlbumsSlice> = (set, get) => ({
     await _deleteAlbum(album);
   },
 
-  moveAlbum: async (album: Album, newParentId: AlbumId | null) => {
+  moveAlbum: async (albumId: AlbumId, newParentId: AlbumId | null) => {
+    const album = get().albumsById[albumId];
+    if (!album) return;
     const state = get();
     const rootDir =
       state.displayDecoy && state.decoyRoot ? state.decoyRoot : state.rootDir;
@@ -482,7 +492,9 @@ export const albumsSlice: CustomStateCreator<AlbumsSlice> = (set, get) => ({
     }
   },
 
-  renameAlbum: async (album: Album, newName: string) => {
+  renameAlbum: async (albumId: AlbumId, newName: string) => {
+    const album = get().albumsById[albumId];
+    if (!album) return;
     const state = get();
     const rootDir =
       state.displayDecoy && state.decoyRoot ? state.decoyRoot : state.rootDir;

@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod album;
+mod clipboard;
 mod constants;
 mod debugging;
 mod duplicates;
@@ -17,6 +18,7 @@ pub use album::{
     add_media_files, get_album_media, get_album_size, get_albums_detached, list_favorites,
     move_album, move_media, move_media_batch, register_new_media, rename_album,
 };
+pub use clipboard::set_clipboard_files;
 pub use debugging::{
     clear_room237_artifacts, rebuild_metadata, rebuild_thumbnails, reset_duplicates,
 };
@@ -59,6 +61,7 @@ pub fn run() {
             get_settings,
             update_settings,
             reset_settings,
+            set_clipboard_files,
         ])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())

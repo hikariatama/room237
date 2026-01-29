@@ -15,26 +15,22 @@ type ContextMenuProps = React.ComponentPropsWithoutRef<
   open?: boolean;
 };
 
-const ContextMenu = ({ ...props }: ContextMenuProps) => {
-  const { children } = props;
-  const [internalOpen, setInternalOpen] = React.useState<boolean>(false);
+const ContextMenu = (props: ContextMenuProps) => {
+  const [internalOpen, setInternalOpen] = React.useState(false);
+  const isControlled = props.open !== undefined;
+  const open = isControlled ? props.open! : internalOpen;
 
   const handleChange = React.useCallback(
     (next: boolean) => {
-      setInternalOpen(next);
+      if (!isControlled) setInternalOpen(next);
       props.onOpenChange?.(next);
     },
-    [props],
+    [isControlled, props],
   );
 
   return (
-    <ContextMenuOpenContext.Provider value={internalOpen}>
-      <ContextMenuPrimitive.Root
-        {...(props as ContextMenuPrimitive.ContextMenuProps)}
-        onOpenChange={handleChange}
-      >
-        {children}
-      </ContextMenuPrimitive.Root>
+    <ContextMenuOpenContext.Provider value={open}>
+      <ContextMenuPrimitive.Root {...props} onOpenChange={handleChange} />
     </ContextMenuOpenContext.Provider>
   );
 };
@@ -84,7 +80,7 @@ const ContextMenuContent = React.forwardRef<
                 } as React.CSSProperties
               }
               className={cn(
-                "bg-background/80 text-foreground relative z-200 min-w-40 origin-(--radix-context-menu-content-transform-origin) overflow-hidden rounded-2xl border border-white/10 p-1 shadow-xl backdrop-blur-xl outline-none",
+                "bg-background/80 text-foreground relative z-200 min-w-40 origin-(--radix-context-menu-content-transform-origin) rounded-2xl border border-white/10 p-1 shadow-xl backdrop-blur-xl outline-none",
                 className,
               )}
             >
@@ -221,7 +217,6 @@ const ContextMenuSubTrigger = React.forwardRef<
     {...props}
   >
     {children}
-    <span className="ml-auto text-xs opacity-70">›</span>
   </ContextMenuPrimitive.SubTrigger>
 ));
 ContextMenuSubTrigger.displayName = ContextMenuPrimitive.SubTrigger.displayName;
@@ -230,14 +225,19 @@ const ContextMenuSubContent = React.forwardRef<
   React.ComponentRef<typeof ContextMenuPrimitive.SubContent>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubContent>
 >(({ className, ...props }, ref) => (
-  <ContextMenuPrimitive.SubContent
-    ref={ref}
-    className={cn(
-      "bg-background/85 text-foreground data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1 min-w-40 overflow-hidden rounded-2xl border border-white/10 p-1 shadow-xl backdrop-blur-xl",
-      className,
-    )}
-    {...props}
-  />
+  <ContextMenuPrimitive.Portal>
+    <ContextMenuPrimitive.SubContent
+      ref={ref}
+      className={cn(
+        "bg-background/85 text-foreground data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1 min-w-40 overflow-hidden rounded-2xl border border-white/10 p-1 shadow-xl backdrop-blur-xl",
+        className,
+      )}
+      sideOffset={8}
+      {...props}
+      // @ts-expect-error prevent weird inheritance
+      forceMount={props.forceMount ?? false}
+    />
+  </ContextMenuPrimitive.Portal>
 ));
 ContextMenuSubContent.displayName = ContextMenuPrimitive.SubContent.displayName;
 

@@ -144,19 +144,6 @@ const Duplicate = memo(function Duplicate({
   );
 }, duplicateEqual);
 
-type AlbumSlice = {
-  id: string;
-  path: string;
-  medias: MediaEntry[] | null;
-} | null;
-const albumSliceEqual = (a: AlbumSlice, b: AlbumSlice) => {
-  return (
-    a?.id === b?.id &&
-    a?.path === b?.path &&
-    (a?.medias?.length ?? -1) === (b?.medias?.length ?? -1)
-  );
-};
-
 export function DuplicatesView() {
   const [ready, setReady] = useState(false);
   const [duplicates, setDuplicates] = useState<string[][]>([]);
@@ -174,13 +161,11 @@ export function DuplicatesView() {
         medias: state.albumMediasByPath[album.path] ?? null,
       };
     },
-    albumSliceEqual,
+    (a, b) =>
+      a?.id === b?.id &&
+      a?.path === b?.path &&
+      (a?.medias?.length ?? -1) === (b?.medias?.length ?? -1),
   );
-  const albumInfo = useMemo(
-    () => (albumSlice ? { id: albumSlice.id, path: albumSlice.path } : null),
-    [albumSlice],
-  );
-  const albumMedias = albumSlice?.medias ?? null;
   const { deleteMedia } = useUpload();
   const showDuplicates = useRoom237((state) => state.showDuplicates);
   const duplicatesAvailable = useRoom237((state) => state.duplicatesAvailable);
@@ -196,9 +181,9 @@ export function DuplicatesView() {
 
   const mediaByName = useMemo(() => {
     const map = new Map<string, MediaEntry>();
-    (albumMedias ?? []).forEach((m) => map.set(m.name, m));
+    (albumSlice?.medias ?? []).forEach((m) => map.set(m.name, m));
     return map;
-  }, [albumMedias]);
+  }, [albumSlice?.medias]);
 
   const normalize = useCallback(
     (groups: string[][]) =>
@@ -216,12 +201,7 @@ export function DuplicatesView() {
   const refreshDuplicates = useCallback(
     async (options?: { initial?: boolean; force?: boolean }) => {
       const state = useRoom237.getState();
-      if (albumInfo?.id !== state.activeAlbumId) {
-        return;
-      }
-
-      const album = state.albumsById[albumInfo.id];
-      if (!album) {
+      if (albumSlice?.id !== state.activeAlbumId) {
         return;
       }
 
@@ -231,7 +211,7 @@ export function DuplicatesView() {
       setDuplicatesLoading(true);
 
       try {
-        const latest = await state.loadAlbumDuplicates(album, {
+        const latest = await state.loadAlbumDuplicates(albumSlice.id, {
           force: options?.force,
         });
         const normalized = normalize(latest);
@@ -253,18 +233,18 @@ export function DuplicatesView() {
         setDuplicatesLoading(false);
       }
     },
-    [albumInfo, normalize, setDuplicatesLoading],
+    [albumSlice, normalize, setDuplicatesLoading],
   );
 
   useEffect(() => {
-    if (!albumInfo) {
+    if (!albumSlice) {
       setDuplicates([]);
       return;
     }
     const state = useRoom237.getState();
-    const latest = state.albumDuplicatesByPath[albumInfo.path] ?? [];
+    const latest = state.albumDuplicatesByPath[albumSlice.path] ?? [];
     setDuplicates(normalize(latest));
-  }, [albumInfo, normalize]);
+  }, [albumSlice, normalize]);
 
   useEffect(() => {
     let cancelled = false;
@@ -284,41 +264,41 @@ export function DuplicatesView() {
   });
 
   useEffect(() => {
-    const count = albumMedias?.length ?? 0;
+    const count = albumSlice?.medias?.length ?? 0;
     const prev = prevAlbumRef.current;
 
-    if (!albumInfo) {
+    if (!albumSlice) {
       prevAlbumRef.current = { path: undefined, count: 0 };
       return;
     }
 
-    if (albumInfo.path !== prev.path) {
-      prevAlbumRef.current = { path: albumInfo.path, count };
+    if (albumSlice.path !== prev.path) {
+      prevAlbumRef.current = { path: albumSlice.path, count };
       return;
     }
 
     if (count > prev.count) {
-      prevAlbumRef.current = { path: albumInfo.path, count };
+      prevAlbumRef.current = { path: albumSlice.path, count };
       if (!batchOperationInProgress) {
         void refreshDuplicates({ initial: false, force: true });
       }
     } else {
-      prevAlbumRef.current = { path: albumInfo.path, count };
+      prevAlbumRef.current = { path: albumSlice.path, count };
     }
   }, [
-    albumInfo,
-    albumMedias?.length,
+    albumSlice,
+    albumSlice?.medias?.length,
     refreshDuplicates,
     batchOperationInProgress,
   ]);
 
   useEffect(() => {
-    if (!batchOperationInProgress && albumInfo) {
+    if (!batchOperationInProgress && albumSlice) {
       void refreshDuplicates({ initial: false, force: true });
     }
-  }, [batchOperationInProgress, albumInfo, refreshDuplicates]);
+  }, [batchOperationInProgress, albumSlice, refreshDuplicates]);
 
-  if (!albumInfo) {
+  if (!albumSlice) {
     return null;
   }
 
@@ -382,8 +362,8 @@ export function DuplicatesView() {
                           variant="outline"
                           size="sm"
                           onClick={async () => {
-                            if (!albumInfo?.path) return;
-                            await markNonDuplicates(albumInfo.path, group);
+                            if (!albumSlice?.path) return;
+                            await markNonDuplicates(albumSlice.path, group);
                             setDuplicates((prev) =>
                               prev.filter((_, i) => i !== index),
                             );

@@ -76,6 +76,61 @@ export const uiSlice: CustomStateCreator<UISlice> = (set, get) => ({
     else n.push(media);
     set({ selection: n });
   },
+  selectRange: (media) => {
+    const state = get();
+    const selection = state.selection;
+
+    if (selection.length === 0) {
+      set({ selection: [media] });
+      return;
+    }
+
+    const lastSelected = selection[selection.length - 1];
+    if (!lastSelected) {
+      set({ selection: [media] });
+      return;
+    }
+
+    const activeAlbumId = state.activeAlbumId;
+    if (!activeAlbumId) return;
+
+    const activeAlbum =
+      activeAlbumId === FAVORITES_ALBUM_ID
+        ? state.favoritesAlbum
+        : state.albumsById[activeAlbumId];
+    if (!activeAlbum) return;
+
+    const medias =
+      activeAlbumId === FAVORITES_ALBUM_ID
+        ? state.albumMediasByPath[FAVORITES_ALBUM_ID]
+        : state.albumMediasByPath[activeAlbum.path];
+    if (!medias) return;
+
+    const sortedMedia = activeAlbum.getSortedMedia(
+      medias,
+      state.sortKey,
+      state.sortDir,
+      state.favoritesOnly,
+      state.randomSeed,
+    );
+
+    const lastIndex = sortedMedia.findIndex(
+      (m) => m.path === lastSelected.path,
+    );
+    const currentIndex = sortedMedia.findIndex((m) => m.path === media.path);
+
+    if (lastIndex === -1 || currentIndex === -1) return;
+
+    const startIndex = Math.min(lastIndex, currentIndex);
+    const endIndex = Math.max(lastIndex, currentIndex);
+
+    const rangeItems = sortedMedia.slice(startIndex, endIndex + 1);
+
+    const existingPaths = new Set(selection.map((m) => m.path));
+    const newItems = rangeItems.filter((m) => !existingPaths.has(m.path));
+
+    set({ selection: [...selection, ...newItems] });
+  },
   clearSelection: () => set({ selection: [] }),
   selectAll: () => {
     const state = get();
@@ -206,6 +261,12 @@ export const uiSlice: CustomStateCreator<UISlice> = (set, get) => ({
     const state = get();
     if (!medias.length) return;
 
+    const loadingToast = toast.loading(
+      translate(get().language, "toast.deleteMedia.loading", {
+        count: medias.length,
+      }),
+    );
+
     set({ batchOperationInProgress: true });
     try {
       const grouped = medias.reduce<Record<string, MediaEntry[]>>(
@@ -223,11 +284,23 @@ export const uiSlice: CustomStateCreator<UISlice> = (set, get) => ({
         for (const media of items) {
           await remove(media.path);
         }
-        await get().loadAlbumMedia(album, { force: true });
+        await get().loadAlbumMedia(album.albumId, { force: true });
       }
 
       await get().refreshFavoritesMap();
       set({ selection: [], viewerIndex: null });
+      loadingToast.success(
+        translate(get().language, "toast.deleteMedia.success", {
+          count: medias.length,
+        }),
+      );
+    } catch (e) {
+      console.error("Failed to delete", e);
+      loadingToast.error(
+        translate(get().language, "toast.deleteMedia.error", {
+          count: medias.length,
+        }),
+      );
     } finally {
       set({ batchOperationInProgress: false });
     }
@@ -267,9 +340,8 @@ export const uiSlice: CustomStateCreator<UISlice> = (set, get) => ({
       touched.add(album.albumId);
 
       for (const id of touched) {
-        const targetAlbum = albums[id];
-        if (!targetAlbum) continue;
-        await get().loadAlbumMedia(targetAlbum, { force: true });
+        if (!albums[id]) continue;
+        await get().loadAlbumMedia(id, { force: true });
       }
 
       await get().refreshFavoritesMap();
@@ -503,7 +575,7 @@ export const uiSlice: CustomStateCreator<UISlice> = (set, get) => ({
           }));
           get().triggerAlbumUpdate(album.albumId);
         } else {
-          await get().loadAlbumMedia(album, { force: true });
+          await get().loadAlbumMedia(album.albumId, { force: true });
         }
         loadingToast.success(
           translate(lang, "toast.addedFiles", {

@@ -41,13 +41,13 @@ export type AlbumsSlice = {
   collapseAutoExpandedExcept: (keepId: AlbumId | null) => void;
   setActiveAlbumId: (albumId: AlbumId | null) => void;
   setLoadingAlbumId: (id: AlbumId | null) => void;
-  isAlbumLoaded: (album: Album) => boolean;
+  isAlbumLoaded: (albumId: AlbumId) => boolean;
   loadAlbumMedia: (
-    album: Album,
+    albumId: AlbumId,
     options?: { force?: boolean },
   ) => Promise<MediaEntry[]>;
   loadAlbumDuplicates: (
-    album: Album,
+    albumId: AlbumId,
     options?: { force?: boolean },
   ) => Promise<string[][]>;
   triggerAlbumUpdate: (albumId: AlbumId) => void;
@@ -56,9 +56,9 @@ export type AlbumsSlice = {
   hardRefresh: () => Promise<void>;
   hotRefresh: () => Promise<void>;
   createAlbum: (name: string, parentId?: AlbumId | null) => Promise<void>;
-  deleteAlbum: (album: Album) => Promise<void>;
-  renameAlbum: (album: Album, newName: string) => Promise<void>;
-  moveAlbum: (album: Album, newParentId: AlbumId | null) => Promise<void>;
+  deleteAlbum: (albumId: AlbumId) => Promise<void>;
+  renameAlbum: (albumId: AlbumId, newName: string) => Promise<void>;
+  moveAlbum: (albumId: AlbumId, newParentId: AlbumId | null) => Promise<void>;
 };
 
 export type MediaSlice = {
@@ -101,6 +101,7 @@ export type UISlice = {
   setLayout: (l: LayoutType) => void;
   setFileManagerName: (name: string | null) => void;
   toggleSelection: (media: MediaEntry, additive: boolean) => void;
+  selectRange: (media: MediaEntry) => void;
   clearSelection: () => void;
   selectAll: () => void;
   setShowDuplicates: (show: boolean) => void;

@@ -1,19 +1,20 @@
-import type { VariantProps } from "class-variance-authority";
-import { cva } from "class-variance-authority";
 import {
+  IconArrowBarRight,
   IconArrowBigUp,
   IconArrowDown,
   IconArrowLeft,
   IconArrowRight,
-  IconArrowBarRight,
   IconArrowUp,
+  IconBackspace,
   IconCommand,
   IconCornerDownLeft,
-  IconBackspace,
+  IconHttpDelete,
   IconCommand as IconOption,
 } from "@tabler/icons-react";
-import { PiMouseRightClickFill, PiMouseLeftClickFill } from "react-icons/pi";
+import type { VariantProps } from "class-variance-authority";
+import { cva } from "class-variance-authority";
 import { useMemo } from "react";
+import { PiMouseLeftClickFill, PiMouseRightClickFill } from "react-icons/pi";
 
 import { cn, useOS } from "@/lib/utils";
 
@@ -66,6 +67,7 @@ function KbdPrimitive({
       arrowup: IconArrowUp,
       click: PiMouseLeftClickFill,
       rightclick: PiMouseRightClickFill,
+      delete: IconHttpDelete,
     };
   }, [os]);
 
@@ -105,13 +107,27 @@ function Kbd({
 }: React.ComponentProps<"div"> & { keys: string[] } & VariantProps<
     typeof kbdVariants
   >) {
+  const os = useOS();
+
+  const keysMapped = useMemo(() => {
+    if (
+      os === "macos" &&
+      keys.length === 1 &&
+      keys[0]?.toLowerCase() === "delete"
+    ) {
+      return ["meta", "backspace"];
+    }
+
+    return keys;
+  }, [os, keys]);
+
   return (
     <kbd
       data-slot="kbd-group"
       className={cn("inline-flex items-center gap-1", className)}
       {...props}
     >
-      {keys.map((key, index) => (
+      {keysMapped.map((key, index) => (
         <KbdPrimitive kbdKey={key} key={index} variant={variant} size={size} />
       ))}
     </kbd>

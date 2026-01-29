@@ -9,13 +9,7 @@ import {
 import { useUpload } from "@/lib/hooks/use-upload";
 import { useViewer } from "@/lib/hooks/use-viewer";
 import { useRoom237 } from "@/lib/stores";
-import {
-  cn,
-  copyFile,
-  extractItemFromState,
-  isImage,
-  isVideo,
-} from "@/lib/utils";
+import { cn, copyFiles, extractItemFromState, isVideo } from "@/lib/utils";
 import {
   IconClipboard,
   IconHeart,
@@ -121,7 +115,7 @@ export default function MediaViewer() {
     if (!item) return 1;
     const containerRect = controlsRef.current?.getBoundingClientRect();
     if (!containerRect) return 1;
-    const nearestIconX = Math.max(
+    const nearestX = Math.max(
       containerRect.left,
       Math.min(cursor.x, containerRect.right),
     );
@@ -130,7 +124,7 @@ export default function MediaViewer() {
       Math.min(cursor.y, containerRect.bottom),
     );
 
-    const distance = Math.hypot(cursor.x - nearestIconX, cursor.y - nearestY);
+    const distance = Math.hypot(cursor.x - nearestX, cursor.y - nearestY);
 
     const maxDist = 150;
     return Math.max(
@@ -544,45 +538,40 @@ export default function MediaViewer() {
                     fill={item.favorite ? "currentColor" : "none"}
                   />
                 </motion.button>
-                {isImage(item.name) && (
-                  <motion.button
-                    whileHover={{ scale: 1.1 }}
-                    whileTap={{ scale: 0.9 }}
-                    transition={{ type: "spring", stiffness: 500, damping: 25 }}
-                    className="flex size-7 cursor-pointer items-center justify-center rounded-full border"
-                    style={{
-                      backgroundColor: controlsBackground,
-                      backdropFilter: controlsBackdropBlur,
-                    }}
-                    onClick={async () => {
-                      setCopying(true);
-                      try {
-                        const blobPromise = copyFile(item);
-                        await navigator.clipboard.write([
-                          new ClipboardItem({ "image/png": blobPromise }),
-                        ]);
-                      } catch (err) {
-                        console.error(err);
-                        toast.error("Failed to copy image");
-                      } finally {
-                        setCopying(false);
-                      }
-                    }}
-                    disabled={copying}
-                  >
-                    {copying ? (
-                      <IconLoader2
-                        className="size-4 animate-spin"
-                        style={{ opacity: controlsOpacity }}
-                      />
-                    ) : (
-                      <IconClipboard
-                        className="size-4"
-                        style={{ opacity: controlsOpacity }}
-                      />
-                    )}
-                  </motion.button>
-                )}
+                <motion.button
+                  whileHover={{ scale: 1.1 }}
+                  whileTap={{ scale: 0.9 }}
+                  transition={{ type: "spring", stiffness: 500, damping: 25 }}
+                  className="flex size-7 cursor-pointer items-center justify-center rounded-full border"
+                  style={{
+                    backgroundColor: controlsBackground,
+                    backdropFilter: controlsBackdropBlur,
+                  }}
+                  onClick={async () => {
+                    setCopying(true);
+                    try {
+                      await copyFiles([item]);
+                    } catch (err) {
+                      console.error(err);
+                      toast.error("Failed to copy");
+                    } finally {
+                      setCopying(false);
+                    }
+                  }}
+                  disabled={copying}
+                >
+                  {copying ? (
+                    <IconLoader2
+                      className="size-4 animate-spin"
+                      style={{ opacity: controlsOpacity }}
+                    />
+                  ) : (
+                    <IconClipboard
+                      className="size-4"
+                      style={{ opacity: controlsOpacity }}
+                    />
+                  )}
+                </motion.button>
                 <Popover open={deleteOpen} onOpenChange={setDeleteOpen}>
                   <PopoverTrigger asChild>
                     <motion.button
@@ -736,7 +725,7 @@ export default function MediaViewer() {
                       const rectHeight =
                         (visibleHeight / scaledHeight) * miniHeight;
 
-                      const rectIconX =
+                      const rectX =
                         ((interLeft - imgLeft) / scaledWidth) * miniWidth;
                       const rectY =
                         ((interTop - imgTop) / scaledHeight) * miniHeight;
@@ -750,7 +739,7 @@ export default function MediaViewer() {
                               height: Math.min(miniHeight, rectHeight),
                               transform: `translate(${Math.max(
                                 0,
-                                Math.min(miniWidth - rectWidth - 2, rectIconX),
+                                Math.min(miniWidth - rectWidth - 2, rectX),
                               )}px, ${Math.max(
                                 0,
                                 Math.min(miniHeight - rectHeight - 2, rectY),

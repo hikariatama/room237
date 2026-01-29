@@ -5,7 +5,7 @@ import { FAVORITES_ALBUM_ID } from "@/lib/consts";
 import { useFileManagerName } from "@/lib/hooks/use-file-manager-name";
 import { useUpload } from "@/lib/hooks/use-upload";
 import { useRoom237 } from "@/lib/stores";
-import type { Album, AlbumNode } from "@/lib/types/album";
+import type { Album, AlbumId, AlbumNode } from "@/lib/types/album";
 import { cn, debounce, getFileManagerIcon } from "@/lib/utils";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { AnimatePresence, motion } from "framer-motion";
@@ -41,18 +41,18 @@ import { Popover, PopoverAnchor, PopoverContent } from "./ui/popover";
 import { toast } from "./toaster";
 
 function AlbumThumbnail({
-  album,
+  thumb,
   isFavorite,
 }: {
-  album: Album | null;
+  thumb: string | null;
   isFavorite?: boolean;
 }) {
   const privacyEnabled = useRoom237((state) => state.privacyEnabled);
   return (
     <div className="relative size-7 shrink-0 overflow-hidden rounded-lg bg-white/20">
-      {album?.thumb && (
+      {thumb && (
         <img
-          src={album.thumb}
+          src={thumb}
           alt="thumb"
           className={cn(
             "h-full w-full rounded-lg object-cover",
@@ -115,11 +115,15 @@ export function FavoriteAlbumItem() {
         loading && "pointer-events-none animate-pulse",
       )}
     >
-      <AlbumThumbnail album={album} isFavorite />
+      <AlbumThumbnail thumb={album.thumb} isFavorite />
       <span className="flex-1 truncate text-sm">Favorites</span>
       <span className="text-muted-foreground text-sm">{album.size}</span>
     </motion.div>
   );
+}
+
+function extractFullAlbum(id: AlbumId): Album | null {
+  return useRoom237.getState().albumsById[id] ?? null;
 }
 
 export function AlbumTreeItem({
@@ -131,7 +135,20 @@ export function AlbumTreeItem({
 }) {
   const album = useStoreWithEqualityFn(
     useRoom237,
-    (state) => state.albumsById[node.id],
+    (state) => {
+      const album = state.albumsById[node.id];
+      if (!album) return null;
+      return {
+        albumId: album.albumId,
+        path: album.path,
+        relativePath: album.relativePath,
+        parentId: album.parentId,
+        size: album.size,
+        totalSize: album.totalSize,
+        thumb: album.thumb,
+        name: album.name,
+      };
+    },
     (a, b) =>
       a?.albumId === b?.albumId &&
       a?.size === b?.size &&
@@ -425,39 +442,22 @@ export function AlbumTreeItem({
       clearDragHoverHint();
       autoExpandedByDragRef.current = false;
 
-      console.log(
-        "[DROP] Album:",
-        album.name,
-        "isSelfDrag:",
-        isSelfDrag,
-        "draggedItems:",
-        draggedItems.length,
-      );
-
       if (album.path === FAVORITES_ALBUM_ID || isSelfDrag) {
-        console.log("[DROP] Skipped - favorites or self drag");
         return;
       }
 
+      const fullAlbum = extractFullAlbum(album.albumId);
+      if (!fullAlbum) return;
+
       const hasFiles = Boolean(e.dataTransfer?.files?.length);
       if (hasFiles) {
-        console.log(
-          "[DROP] External files detected, count:",
-          e.dataTransfer.files.length,
-        );
-        void addFilesToAlbum(album, e.dataTransfer.files);
+        void addFilesToAlbum(fullAlbum, e.dataTransfer.files);
         clearDraggedItems();
         return;
       }
 
       if (draggedItems.length > 0) {
-        console.log(
-          "[DROP] Moving items to album:",
-          album.name,
-          "items:",
-          draggedItems.map((i) => i.name),
-        );
-        void moveDraggedToAlbum(album);
+        void moveDraggedToAlbum(fullAlbum);
       } else {
         console.log("[DROP] No dragged items to move");
       }
@@ -645,7 +645,7 @@ export function AlbumTreeItem({
     async (targetId: string) => {
       if (!album) return;
       try {
-        await moveAlbum(album, targetId);
+        await moveAlbum(album.albumId, targetId);
       } catch (error) {
         console.error(error);
       }
@@ -670,7 +670,7 @@ export function AlbumTreeItem({
     async (e: React.FormEvent) => {
       e.preventDefault();
       if (!album) return;
-      await renameAlbum(album, nameInput);
+      await renameAlbum(album.albumId, nameInput);
       setInlineAction(null);
     },
     [album, nameInput, renameAlbum],
@@ -699,7 +699,7 @@ export function AlbumTreeItem({
 
   const handleDelete = useCallback(async () => {
     if (!album) return;
-    await deleteAlbum(album);
+    await deleteAlbum(album.albumId);
     setInlineAction(null);
     await hotRefresh();
   }, [album, deleteAlbum, hotRefresh]);
@@ -879,7 +879,7 @@ export function AlbumTreeItem({
                   </motion.button>
                 )}
               </AnimatePresence>
-              <AlbumThumbnail album={album} />
+              <AlbumThumbnail thumb={album.thumb} />
               <span className="flex-1 truncate text-sm">{album.name}</span>
               <span className="text-muted-foreground text-sm">
                 {album.totalSize ?? album.size}
