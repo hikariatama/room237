@@ -2,9 +2,54 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { useRoom237 } from "../stores";
+import { copyFiles, extractItemFromState, useOS } from "../utils";
 import { useViewer } from "./use-viewer";
 
+const compareKey = (keyRaw: string, keyEn: string) => {
+  const enToRu: Record<string, string> = {
+    q: "й",
+    w: "ц",
+    e: "у",
+    r: "к",
+    t: "е",
+    y: "н",
+    u: "г",
+    i: "ш",
+    o: "щ",
+    p: "з",
+    "[": "х",
+    "]": "ъ",
+    a: "ф",
+    s: "ы",
+    d: "в",
+    f: "а",
+    g: "п",
+    h: "р",
+    j: "о",
+    k: "л",
+    l: "д",
+    ";": "ж",
+    "'": "э",
+    z: "я",
+    x: "ч",
+    c: "с",
+    v: "м",
+    b: "и",
+    n: "т",
+    m: "ь",
+    ",": "б",
+    ".": "ю",
+    "/": ".",
+    "`": "ё",
+  };
+  const key = keyRaw.toLowerCase();
+  if (key === keyEn) return true;
+  if (enToRu[key] === keyEn) return true;
+  return false;
+};
+
 export function useKeyboardShortcuts() {
+  const os = useOS();
   const selection = useRoom237((state) => state.selection);
   const clearSelection = useRoom237((state) => state.clearSelection);
   const selectAll = useRoom237((state) => state.selectAll);
@@ -48,6 +93,8 @@ export function useKeyboardShortcuts() {
     const h = (e: KeyboardEvent) => {
       resetInactivityTimer();
 
+      const isMeta = os === "macos" ? e.metaKey : e.ctrlKey;
+
       if (document.activeElement instanceof HTMLInputElement) return;
       const k = e.key.toLowerCase();
 
@@ -76,21 +123,46 @@ export function useKeyboardShortcuts() {
         }
         return;
       }
-      if (lockscreenEnabled && (k === "l" || k === "д")) {
+      if (lockscreenEnabled && compareKey(k, "l")) {
         setLocked(true);
         return;
       }
       if (viewer.viewerIndex !== null) {
         if (e.key === "ArrowLeft") viewer.prev();
         if (e.key === "ArrowRight") viewer.next();
+        if (isMeta && compareKey(k, "c")) {
+          const state = useRoom237.getState();
+          const item = extractItemFromState({
+            state,
+            index: viewer.viewerIndex,
+          });
+          if (item) {
+            e.preventDefault();
+            void copyFiles([item]);
+          }
+        }
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && (k === "a" || k === "ф")) {
+      if (isMeta && compareKey(k, "c")) {
+        if (selection.length > 0) {
+          e.preventDefault();
+          void copyFiles(selection);
+          return;
+        }
+      }
+      if ((os === "macos" && isMeta && k === "backspace") || k === "delete") {
+        if (selection.length > 0) {
+          e.preventDefault();
+          void useRoom237.getState().deleteMedias(selection);
+          return;
+        }
+      }
+      if (isMeta && compareKey(k, "a")) {
         e.preventDefault();
         selectAll();
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && (k === "d" || k === "в")) {
+      if (isMeta && compareKey(k, "d")) {
         e.preventDefault();
         clearSelection();
         return;
@@ -133,5 +205,6 @@ export function useKeyboardShortcuts() {
     decoyRoot,
     hotRefresh,
     lockscreenEnabled,
+    os,
   ]);
 }

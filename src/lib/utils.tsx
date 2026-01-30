@@ -1,10 +1,10 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import type { FileMeta, MediaEntry, OS } from "./types";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import path from "path";
-import { type DetachedMediaEntry } from "./types";
-import { exists, readFile } from "@tauri-apps/plugin-fs";
+import type { DetachedMediaEntry } from "./types";
+import { exists } from "@tauri-apps/plugin-fs";
 import { TbBrandFinder } from "react-icons/tb";
 import type { JSX } from "react";
 import { IconFolder } from "@tabler/icons-react";
@@ -238,45 +238,42 @@ export function attachMediaEntry(
   } satisfies MediaEntry;
 }
 
-export const copyFile = async (item: MediaEntry): Promise<Blob> => {
-  if (!item) throw new Error("No item selected");
-  if (item.name.toLowerCase().endsWith(".png")) {
-    const file = await readFile(item.path);
-    if (!file) {
-      toast.error("Failed to read image file.");
-      throw new Error("Failed to read image file.");
+export const copyFiles = async (items: MediaEntry[]): Promise<void> => {
+  if (!items || items.length === 0) throw new Error("No items selected");
+
+  try {
+    const filePaths = items.map((item) => item.path);
+
+    try {
+      await invoke<void>("set_clipboard_files", { paths: filePaths });
+
+      const count = items.length;
+      if (count === 1) {
+        toast.success("File copied to clipboard!");
+      } else {
+        toast.success(`${count} files copied to clipboard!`);
+      }
+    } catch (nativeError) {
+      console.warn(
+        "Native clipboard failed, falling back to text:",
+        nativeError,
+      );
+
+      const pathsText = filePaths.join("\n");
+      await navigator.clipboard.writeText(pathsText);
+
+      const count = items.length;
+      if (count === 1) {
+        toast.success("File path copied to clipboard!");
+      } else {
+        toast.success(`${count} file paths copied to clipboard!`);
+      }
     }
-    const blob = new Blob([file.buffer], {
-      type: "image/png",
-    });
-    // BUG: Async Clipboard API on Webkit (Safari) raises NotAllowed if the blob is passed instead of a Promise
-    // ? Thus, it is more logical to send a toast here (when the file is actually loaded), since
-    // ? it is the closest we can get to the actual state of success.
-    toast.success("Image copied to clipboard!");
-    return blob;
+  } catch (error) {
+    console.error("Failed to copy files:", error);
+    toast.error("Failed to copy to clipboard");
+    throw error;
   }
-  if (!isImage(item.name)) {
-    throw new Error("Failed to read image file.");
-  }
-
-  const file = await readFile(item.path);
-  if (!file) {
-    toast.error("Failed to read image file.");
-    throw new Error("Failed to read image file.");
-  }
-
-  const blob = new Blob([file.buffer]);
-  const imageBitmap = await createImageBitmap(blob);
-
-  const canvas = new OffscreenCanvas(imageBitmap.width, imageBitmap.height);
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    throw new Error("Failed to read image file.");
-  }
-  ctx.drawImage(imageBitmap, 0, 0);
-  const pngBlob = await canvas.convertToBlob({ type: "image/png" });
-  toast.success("Image copied to clipboard!");
-  return pngBlob;
 };
 
 type IdleDeadlineLike = { timeRemaining(): number };

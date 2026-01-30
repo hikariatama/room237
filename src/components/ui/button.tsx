@@ -16,10 +16,10 @@ const buttonVariants = cva(
         destructive:
           "text-white shadow-xs bg-red-500/30 hover:bg-red-500/50 focus-visible:ring-red-500/20 dark:focus-visible:ring-red-500/40 dark:bg-red-500/60",
         outline:
-          "border bg-background/30 shadow-xs dark:border-input hover:bg-background/50",
+          "border bg-background/30 shadow-xs dark:border-input hover:bg-primary/10",
         secondary:
-          "bg-secondary text-secondary-foreground shadow-xs hover:bg-secondary/80",
-        ghost: "hover:bg-background/50",
+          "bg-secondary text-secondary-foreground shadow-xs hover:bg-primary/10",
+        ghost: "hover:bg-primary/10",
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {
@@ -61,9 +61,6 @@ function Button({
     <motion.button
       data-slot="button"
       className={cn(buttonVariants({ variant, size, className }))}
-      whileHover={{ scale: 1.06 }}
-      whileTap={{ scale: 0.98 }}
-      transition={{ duration: 0.15 }}
       {...(props as Omit<HTMLMotionProps<"button">, "ref">)}
     >
       {props.keys ? (

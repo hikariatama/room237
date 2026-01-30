@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { useUpload } from "@/lib/hooks/use-upload";
 import { useViewer } from "@/lib/hooks/use-viewer";
 import { useRoom237 } from "@/lib/stores";
-import { cn, copyFile, isImage, extractItemFromState } from "@/lib/utils";
+import { cn, copyFiles, extractItemFromState } from "@/lib/utils";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   IconClipboard,
@@ -52,6 +52,7 @@ export const MediaExtras = memo(function MediaExtras({
   const favoriteRef = useRef<HTMLButtonElement>(null);
 
   const onSelectToggle = useRoom237((state) => state.toggleSelection);
+  const onSelectRange = useRoom237((state) => state.selectRange);
   const showExtras = useRoom237((state) => state.columns <= 10);
   const language = useRoom237((state) => state.language);
   const { t } = useI18n();
@@ -67,6 +68,16 @@ export const MediaExtras = memo(function MediaExtras({
   const click = useCallback(
     (e: ReactMouseEvent<HTMLDivElement>) => {
       const add = e.metaKey || e.ctrlKey;
+      const shift = e.shiftKey;
+
+      if (shift) {
+        e.preventDefault();
+        const state = useRoom237.getState();
+        const item = extractItemFromState({ state, path: mediaPath });
+        if (item) onSelectRange(item);
+        return;
+      }
+
       if (add) {
         e.preventDefault();
         const state = useRoom237.getState();
@@ -76,7 +87,7 @@ export const MediaExtras = memo(function MediaExtras({
       }
       onView();
     },
-    [mediaPath, onView, onSelectToggle],
+    [mediaPath, onView, onSelectToggle, onSelectRange],
   );
 
   let dateTimestamp: number | undefined;
@@ -205,43 +216,38 @@ export const MediaExtras = memo(function MediaExtras({
             >
               <IconTrash className="h-4 w-4" />
             </motion.button>
-            {isImage(itemData.name ?? "") && (
-              <motion.button
-                whileHover={copying ? {} : { scale: 1.1 }}
-                whileTap={copying ? {} : { scale: 0.9 }}
-                transition={{ type: "spring", stiffness: 500, damping: 25 }}
-                className="bg-background/70 pointer-events-auto flex h-7 w-7 cursor-pointer items-center justify-center rounded-md backdrop-blur-sm"
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  setCopying(true);
-                  try {
-                    const state = useRoom237.getState();
-                    const item = extractItemFromState({
-                      state,
-                      path: mediaPath,
-                    });
-                    if (!item) return;
-                    const blobPromise = copyFile(item);
-                    await navigator.clipboard.write([
-                      new ClipboardItem({ "image/png": blobPromise }),
-                    ]);
-                  } catch (err) {
-                    console.error(err);
-                    toast.error(t("media.copyFailed"));
-                  } finally {
-                    setCopying(false);
-                  }
-                }}
-                onPointerDownCapture={(e) => e.stopPropagation()}
-                disabled={copying}
-              >
-                {copying ? (
-                  <IconLoader2 className="text-muted-foreground size-4 animate-spin" />
-                ) : (
-                  <IconClipboard className="size-4" />
-                )}
-              </motion.button>
-            )}
+            <motion.button
+              whileHover={copying ? {} : { scale: 1.1 }}
+              whileTap={copying ? {} : { scale: 0.9 }}
+              transition={{ type: "spring", stiffness: 500, damping: 25 }}
+              className="bg-background/70 pointer-events-auto flex h-7 w-7 cursor-pointer items-center justify-center rounded-md backdrop-blur-sm"
+              onClick={async (e) => {
+                e.stopPropagation();
+                setCopying(true);
+                try {
+                  const state = useRoom237.getState();
+                  const item = extractItemFromState({
+                    state,
+                    path: mediaPath,
+                  });
+                  if (!item) return;
+                  await copyFiles([item]);
+                } catch (err) {
+                  console.error(err);
+                  toast.error(t("media.copyFailed"));
+                } finally {
+                  setCopying(false);
+                }
+              }}
+              onPointerDownCapture={(e) => e.stopPropagation()}
+              disabled={copying}
+            >
+              {copying ? (
+                <IconLoader2 className="text-muted-foreground size-4 animate-spin" />
+              ) : (
+                <IconClipboard className="size-4" />
+              )}
+            </motion.button>
           </div>
         </div>
       )}

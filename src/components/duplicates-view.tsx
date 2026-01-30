@@ -6,6 +6,7 @@ import { markNonDuplicates } from "@/lib/fs/albumService";
 import { useUpload } from "@/lib/hooks/use-upload";
 import { useRoom237 } from "@/lib/stores";
 import type { MediaEntry } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import { AnimatePresence, motion } from "framer-motion";
 import { IconTrash, IconX } from "@tabler/icons-react";
 import {
@@ -20,13 +21,16 @@ import {
 import { useStoreWithEqualityFn } from "zustand/traditional";
 import { Button } from "./ui/button";
 import { useI18n } from "@/lib/i18n";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { PopoverClose } from "@radix-ui/react-popover";
+import { ScrollArea } from "./ui/scroll-area";
 
 function ScrollRightFade({
   children,
   className,
 }: {
   children: React.ReactNode;
-  className: string;
+  className?: string;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [showFade, setShowFade] = useState(false);
@@ -58,10 +62,14 @@ function ScrollRightFade({
   }, [update]);
 
   return (
-    <div className="relative">
-      <div ref={ref} className={className}>
+    <div className={cn("relative", className)}>
+      <ScrollArea
+        className="w-full pb-2.5"
+        viewportRef={ref}
+        orientation="horizontal"
+      >
         {children}
-      </div>
+      </ScrollArea>
       <AnimatePresence>
         {showFade && (
           <motion.div
@@ -144,19 +152,6 @@ const Duplicate = memo(function Duplicate({
   );
 }, duplicateEqual);
 
-type AlbumSlice = {
-  id: string;
-  path: string;
-  medias: MediaEntry[] | null;
-} | null;
-const albumSliceEqual = (a: AlbumSlice, b: AlbumSlice) => {
-  return (
-    a?.id === b?.id &&
-    a?.path === b?.path &&
-    (a?.medias?.length ?? -1) === (b?.medias?.length ?? -1)
-  );
-};
-
 export function DuplicatesView() {
   const [ready, setReady] = useState(false);
   const [duplicates, setDuplicates] = useState<string[][]>([]);
@@ -174,15 +169,14 @@ export function DuplicatesView() {
         medias: state.albumMediasByPath[album.path] ?? null,
       };
     },
-    albumSliceEqual,
+    (a, b) =>
+      a?.id === b?.id &&
+      a?.path === b?.path &&
+      (a?.medias?.length ?? -1) === (b?.medias?.length ?? -1),
   );
-  const albumInfo = useMemo(
-    () => (albumSlice ? { id: albumSlice.id, path: albumSlice.path } : null),
-    [albumSlice],
-  );
-  const albumMedias = albumSlice?.medias ?? null;
-  const { deleteMedia } = useUpload();
+  const { deleteMedia, deleteMedias } = useUpload();
   const showDuplicates = useRoom237((state) => state.showDuplicates);
+  const setShowDuplicates = useRoom237((state) => state.setShowDuplicates);
   const duplicatesAvailable = useRoom237((state) => state.duplicatesAvailable);
   const setDuplicatesAvailable = useRoom237(
     (state) => state.setDuplicatesAvailable,
@@ -196,9 +190,19 @@ export function DuplicatesView() {
 
   const mediaByName = useMemo(() => {
     const map = new Map<string, MediaEntry>();
-    (albumMedias ?? []).forEach((m) => map.set(m.name, m));
+    (albumSlice?.medias ?? []).forEach((m) => map.set(m.name, m));
     return map;
-  }, [albumMedias]);
+  }, [albumSlice?.medias]);
+
+  const duplicatesToDelete = useMemo(() => {
+    return duplicates.flatMap((group) => {
+      const resolved = group
+        .map((item) => mediaByName.get(item))
+        .filter((item): item is MediaEntry => Boolean(item));
+      if (resolved.length <= 1) return [] as MediaEntry[];
+      return resolved.slice(1);
+    });
+  }, [duplicates, mediaByName]);
 
   const normalize = useCallback(
     (groups: string[][]) =>
@@ -210,18 +214,14 @@ export function DuplicatesView() {
 
   useEffect(() => {
     const hasAny = duplicates.some((group) => group.length > 1);
+    if (!hasAny) setShowDuplicates(false);
     setDuplicatesAvailable(hasAny);
-  }, [duplicates, setDuplicatesAvailable]);
+  }, [duplicates, setDuplicatesAvailable, setShowDuplicates]);
 
   const refreshDuplicates = useCallback(
     async (options?: { initial?: boolean; force?: boolean }) => {
       const state = useRoom237.getState();
-      if (albumInfo?.id !== state.activeAlbumId) {
-        return;
-      }
-
-      const album = state.albumsById[albumInfo.id];
-      if (!album) {
+      if (albumSlice?.id !== state.activeAlbumId) {
         return;
       }
 
@@ -231,7 +231,7 @@ export function DuplicatesView() {
       setDuplicatesLoading(true);
 
       try {
-        const latest = await state.loadAlbumDuplicates(album, {
+        const latest = await state.loadAlbumDuplicates(albumSlice.id, {
           force: options?.force,
         });
         const normalized = normalize(latest);
@@ -253,18 +253,18 @@ export function DuplicatesView() {
         setDuplicatesLoading(false);
       }
     },
-    [albumInfo, normalize, setDuplicatesLoading],
+    [albumSlice, normalize, setDuplicatesLoading],
   );
 
   useEffect(() => {
-    if (!albumInfo) {
+    if (!albumSlice) {
       setDuplicates([]);
       return;
     }
     const state = useRoom237.getState();
-    const latest = state.albumDuplicatesByPath[albumInfo.path] ?? [];
+    const latest = state.albumDuplicatesByPath[albumSlice.path] ?? [];
     setDuplicates(normalize(latest));
-  }, [albumInfo, normalize]);
+  }, [albumSlice, normalize]);
 
   useEffect(() => {
     let cancelled = false;
@@ -284,41 +284,50 @@ export function DuplicatesView() {
   });
 
   useEffect(() => {
-    const count = albumMedias?.length ?? 0;
+    const count = albumSlice?.medias?.length ?? 0;
     const prev = prevAlbumRef.current;
 
-    if (!albumInfo) {
+    if (!albumSlice) {
       prevAlbumRef.current = { path: undefined, count: 0 };
       return;
     }
 
-    if (albumInfo.path !== prev.path) {
-      prevAlbumRef.current = { path: albumInfo.path, count };
+    if (albumSlice.path !== prev.path) {
+      prevAlbumRef.current = { path: albumSlice.path, count };
       return;
     }
 
     if (count > prev.count) {
-      prevAlbumRef.current = { path: albumInfo.path, count };
+      prevAlbumRef.current = { path: albumSlice.path, count };
       if (!batchOperationInProgress) {
         void refreshDuplicates({ initial: false, force: true });
       }
     } else {
-      prevAlbumRef.current = { path: albumInfo.path, count };
+      prevAlbumRef.current = { path: albumSlice.path, count };
     }
   }, [
-    albumInfo,
-    albumMedias?.length,
+    albumSlice,
+    albumSlice?.medias?.length,
     refreshDuplicates,
     batchOperationInProgress,
   ]);
 
   useEffect(() => {
-    if (!batchOperationInProgress && albumInfo) {
+    if (!batchOperationInProgress && albumSlice) {
       void refreshDuplicates({ initial: false, force: true });
     }
-  }, [batchOperationInProgress, albumInfo, refreshDuplicates]);
+  }, [batchOperationInProgress, albumSlice, refreshDuplicates]);
 
-  if (!albumInfo) {
+  const confirmDeleteAllDuplicates = useCallback(async () => {
+    if (!duplicatesToDelete.length) {
+      return;
+    }
+
+    await deleteMedias(duplicatesToDelete);
+    await refreshDuplicates({ initial: false, force: true });
+  }, [deleteMedias, duplicatesToDelete, refreshDuplicates]);
+
+  if (!albumSlice) {
     return null;
   }
 
@@ -327,9 +336,9 @@ export function DuplicatesView() {
       {showDuplicates && duplicatesAvailable && (
         <motion.div
           key="duplicates-viewer"
-          className="border-border bg-background/60 fixed right-6 w-[60vw] origin-top overflow-y-scroll rounded-2xl border backdrop-blur-lg"
+          className="border-border bg-background/60 fixed right-6 w-[60vw] origin-top rounded-2xl border backdrop-blur-lg"
           style={{
-            maxHeight: `calc(100vh - 4.5rem)`,
+            height: `calc(100vh - 4.5rem)`,
             top: `3.5rem`,
           }}
           initial={{ opacity: 0, y: 20, scale: 0.8 }}
@@ -337,111 +346,162 @@ export function DuplicatesView() {
           exit={{ opacity: 0, y: 20, scale: 0.8 }}
           transition={{ type: "spring", stiffness: 300, damping: 30 }}
         >
-          {!ready &&
-          (!duplicates ||
-            duplicates.length <= 0 ||
-            !duplicates.some(
-              (group) =>
-                group.map((item) => mediaByName.get(item)).filter(Boolean)
-                  .length > 1,
-            )) ? (
-            <div className="flex h-full flex-col gap-4 p-4">
-              {Array.from({ length: 6 }).map((_, index) => (
-                <div key={index} className="flex w-full gap-4">
-                  {Array.from({
-                    length: Math.floor(Math.random() * 5) + 1,
-                  }).map((_, i) => (
-                    <div
-                      key={i}
-                      className="bg-background/60 border-border/50 aspect-square w-31 animate-pulse rounded-lg border"
-                      style={{
-                        animationDelay: `${(i / (5 * 5 - 1)) * 1.5}s`,
-                      }}
-                    />
-                  ))}
+          <ScrollArea className="h-full">
+            {!ready &&
+            (!duplicates ||
+              duplicates.length <= 0 ||
+              !duplicates.some(
+                (group) =>
+                  group.map((item) => mediaByName.get(item)).filter(Boolean)
+                    .length > 1,
+              )) ? (
+              <div className="flex h-full flex-col gap-4 p-4">
+                {Array.from({ length: 6 }).map((_, index) => (
+                  <div key={index} className="flex w-full gap-4">
+                    {Array.from({
+                      length: Math.floor(Math.random() * 5) + 1,
+                    }).map((_, i) => (
+                      <div
+                        key={i}
+                        className="bg-background/60 border-border/50 aspect-square w-31 animate-pulse rounded-lg border"
+                        style={{
+                          animationDelay: `${(i / (5 * 5 - 1)) * 1.5}s`,
+                        }}
+                      />
+                    ))}
+                  </div>
+                ))}
+              </div>
+            ) : duplicates &&
+              duplicates.length > 0 &&
+              duplicates.some(
+                (group) =>
+                  group.map((item) => mediaByName.get(item)).filter(Boolean)
+                    .length > 1,
+              ) ? (
+              <div className="flex flex-col gap-2 p-4">
+                {duplicates.map(
+                  (group, index) =>
+                    group.length > 1 && (
+                      <div
+                        key={index}
+                        className="border-border/60 bg-background/60 relative overflow-hidden rounded-2xl border p-3 shadow-sm"
+                      >
+                        <div className="mb-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={async () => {
+                              if (!albumSlice?.path) return;
+                              await markNonDuplicates(albumSlice.path, group);
+                              setDuplicates((prev) =>
+                                prev.filter((_, i) => i !== index),
+                              );
+                            }}
+                          >
+                            {t("duplicates.markNonDuplicates")}
+                          </Button>
+                        </div>
+                        <div className="relative">
+                          {group.length > 5 ? (
+                            <ScrollRightFade>
+                              <div className="flex gap-3">
+                                {group.map((item) => {
+                                  const image = mediaByName.get(item);
+                                  if (!image) return null;
+                                  return (
+                                    <div
+                                      key={image.name}
+                                      className="w-31 shrink-0"
+                                    >
+                                      <Duplicate
+                                        image={image}
+                                        onDelete={() => {
+                                          void (async () => {
+                                            await deleteMedia(image);
+                                          })();
+                                        }}
+                                      />
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </ScrollRightFade>
+                          ) : (
+                            <div className="flex flex-wrap gap-3">
+                              {group.map((item) => {
+                                const image = mediaByName.get(item);
+                                if (!image) return null;
+                                return (
+                                  <div
+                                    key={image.name}
+                                    className="w-31 shrink-0"
+                                  >
+                                    <Duplicate
+                                      image={image}
+                                      onDelete={() => {
+                                        void (async () => {
+                                          await deleteMedia(image);
+                                        })();
+                                      }}
+                                    />
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ),
+                )}
+                <div className="mt-3 flex justify-end">
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="destructive"
+                        disabled={
+                          batchOperationInProgress ||
+                          duplicatesToDelete.length === 0
+                        }
+                      >
+                        {t("duplicates.deleteAll")}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent>
+                      <div className="mb-2 text-lg font-semibold">
+                        {t("duplicates.deleteAll")}
+                      </div>
+                      <p className="text-foreground/80 mb-4 text-sm">
+                        {t("duplicates.deleteAllConfirm")}
+                      </p>
+                      <div className="flex justify-end gap-2">
+                        <PopoverClose asChild>
+                          <Button variant="outline">
+                            {t("common.cancel")}
+                          </Button>
+                        </PopoverClose>
+                        <PopoverClose asChild>
+                          <Button
+                            variant="destructive"
+                            disabled={batchOperationInProgress}
+                            onClick={confirmDeleteAllDuplicates}
+                          >
+                            {t("duplicates.deleteAll")}
+                          </Button>
+                        </PopoverClose>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
                 </div>
-              ))}
-            </div>
-          ) : duplicates &&
-            duplicates.length > 0 &&
-            duplicates.some(
-              (group) =>
-                group.map((item) => mediaByName.get(item)).filter(Boolean)
-                  .length > 1,
-            ) ? (
-            <div className="flex flex-col gap-2 p-4">
-              {duplicates.map(
-                (group, index) =>
-                  group.length > 1 && (
-                    <div
-                      key={index}
-                      className="border-border/60 bg-background/60 relative overflow-hidden rounded-2xl border p-3 shadow-sm"
-                    >
-                      <div className="mb-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={async () => {
-                            if (!albumInfo?.path) return;
-                            await markNonDuplicates(albumInfo.path, group);
-                            setDuplicates((prev) =>
-                              prev.filter((_, i) => i !== index),
-                            );
-                          }}
-                        >
-                          {t("duplicates.markNonDuplicates")}
-                        </Button>
-                      </div>
-                      <div className="relative">
-                        {group.length > 5 ? (
-                          <ScrollRightFade className="flex gap-3 overflow-x-auto pb-2">
-                            {group.map((item) => {
-                              const image = mediaByName.get(item);
-                              if (!image) return null;
-                              return (
-                                <div key={image.name} className="w-31 shrink-0">
-                                  <Duplicate
-                                    image={image}
-                                    onDelete={() => {
-                                      void (async () => {
-                                        await deleteMedia(image);
-                                      })();
-                                    }}
-                                  />
-                                </div>
-                              );
-                            })}
-                          </ScrollRightFade>
-                        ) : (
-                          <div className="flex flex-wrap gap-3">
-                            {group.map((item) => {
-                              const image = mediaByName.get(item);
-                              if (!image) return null;
-                              return (
-                                <div key={image.name} className="w-31 shrink-0">
-                                  <Duplicate
-                                    image={image}
-                                    onDelete={() => {
-                                      void (async () => {
-                                        await deleteMedia(image);
-                                      })();
-                                    }}
-                                  />
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ),
-              )}
-            </div>
-          ) : (
-            <div className="p-4 text-center">
-              <span className="text-foreground/80">{t("duplicates.none")}</span>
-            </div>
-          )}
+              </div>
+            ) : (
+              <div className="p-4 text-center">
+                <span className="text-foreground/80">
+                  {t("duplicates.none")}
+                </span>
+              </div>
+            )}
+          </ScrollArea>
         </motion.div>
       )}
     </AnimatePresence>

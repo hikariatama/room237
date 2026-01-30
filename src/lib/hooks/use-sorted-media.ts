@@ -6,6 +6,7 @@ import { useActiveAlbum } from "./use-active-album";
 import type { MediaEntry } from "../types";
 import { FAVORITES_ALBUM_ID } from "../consts";
 import { useStoreWithEqualityFn } from "zustand/traditional";
+import { isEqual } from "lodash";
 
 export type SortedMediaEntry = MediaEntry & { index: number };
 
@@ -46,6 +47,7 @@ export function useSortedMedia(): SortedMediaResult {
       if (a.medias.length !== b.medias.length) return false;
       for (let i = 0; i < a.medias.length; i++) {
         if (a.medias[i]?.path !== b.medias[i]?.path) return false;
+        if (!isEqual(a.medias[i]?.meta, b.medias[i]?.meta)) return false;
       }
       return true;
     },

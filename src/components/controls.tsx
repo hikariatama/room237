@@ -1,10 +1,35 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useEffect, useState } from "react";
 
 export function Controls() {
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const toggleFullscreen = async () => {
+    const currentFullscreen = await getCurrentWindow().isFullscreen();
+    await getCurrentWindow().setFullscreen(!currentFullscreen);
+  };
+
+  useEffect(() => {
+    const checkFullscreen = async () => {
+      const currentFullscreen = await getCurrentWindow().isFullscreen();
+      setIsFullscreen(currentFullscreen);
+    };
+
+    void checkFullscreen();
+
+    const unlisten = getCurrentWindow().onResized(() => {
+      void checkFullscreen();
+    });
+
+    return () => {
+      setIsFullscreen(false);
+      void unlisten.then((u) => u());
+    };
+  }, []);
+
   return (
-    <div className="absolute top-5 left-5 z-9999 flex items-center gap-2.25">
+    <div className="group absolute top-5 left-5 z-9999 flex items-center gap-2.25">
       <div
-        className="flex size-3.5 items-center justify-center rounded-full border-[0.5px] border-black/20 bg-[#ec6765] text-transparent saturate-150 hover:text-black/50"
+        className="flex size-3.5 items-center justify-center rounded-full border-[0.5px] border-black/20 bg-[#ec6765] text-transparent saturate-150 group-hover:text-black/50"
         onClick={() => getCurrentWindow().close()}
       >
         <svg
@@ -21,7 +46,7 @@ export function Controls() {
         </svg>
       </div>
       <div
-        className="flex size-3.5 items-center justify-center rounded-full border-[0.5px] border-black/20 bg-[#ebc33f] text-transparent saturate-150 hover:text-black/50"
+        className="flex size-3.5 items-center justify-center rounded-full border-[0.5px] border-black/20 bg-[#ebc33f] text-transparent saturate-150 group-hover:text-black/50"
         onClick={() => getCurrentWindow().minimize()}
       >
         <svg
@@ -42,25 +67,44 @@ export function Controls() {
         </svg>
       </div>
       <div
-        className="flex size-3.5 items-center justify-center rounded-full border-[0.5px] border-black/20 bg-[#65c466] text-transparent saturate-150 hover:text-black/50"
-        onClick={() => getCurrentWindow().setFullscreen(true)}
+        className="flex size-3.5 items-center justify-center rounded-full border-[0.5px] border-black/20 bg-[#65c466] text-transparent saturate-150 group-hover:text-black/50"
+        onClick={toggleFullscreen}
       >
-        <svg
-          width="6"
-          height="6"
-          viewBox="0 0 15 15"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <g clipPath="url(#clip0_20_2057)">
+        {isFullscreen ? (
+          <svg
+            width="10"
+            height="10"
+            viewBox="0 0 10 10"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
             <path
-              fillRule="evenodd"
-              clipRule="evenodd"
-              d="M3.53068 0.433838L15.0933 12.0409C15.0933 12.0409 15.0658 5.35028 15.0658 4.01784C15.0658 1.32095 14.1813 0.433838 11.5378 0.433838C10.6462 0.433838 3.53068 0.433838 3.53068 0.433838ZM12.4409 15.5378L0.87735 3.93073C0.87735 3.93073 0.905794 10.6214 0.905794 11.9538C0.905794 14.6507 1.79024 15.5378 4.43291 15.5378C5.32535 15.5378 12.4409 15.5378 12.4409 15.5378Z"
+              d="M9.12542 4.50024L4.5 9.14307C4.5 9.14307 4.51138 6.4668 4.51138 5.93384C4.51138 4.85508 4.86516 4.50024 5.92222 4.50024C6.2792 4.50024 9.12542 4.50024 9.12542 4.50024Z"
               fill="currentColor"
             />
-          </g>
-        </svg>
+            <path
+              d="M4.62505 0.00024128L0 4.64307H3.20285C4.26025 4.64307 4.61405 4.28822 4.61405 3.20947C4.61405 2.67649 4.62505 0.00024128 4.62505 0.00024128Z"
+              fill="currentColor"
+            />
+          </svg>
+        ) : (
+          <svg
+            width="6"
+            height="6"
+            viewBox="0 0 6 6"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M0.99958 5.99293L5.625 1.3501C5.625 1.3501 5.61362 4.02637 5.61362 4.55933C5.61362 5.63809 5.25984 5.99293 4.20278 5.99293C3.8458 5.99293 0.99958 5.99293 0.99958 5.99293Z"
+              fill="currentColor"
+            />
+            <path
+              d="M-4.76837e-05 4.64283L4.625 0H1.42215C0.364752 0 0.010952 0.354845 0.010952 1.4336C0.010952 1.96658 -4.76837e-05 4.64283 -4.76837e-05 4.64283Z"
+              fill="currentColor"
+            />
+          </svg>
+        )}
       </div>
     </div>
   );

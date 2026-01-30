@@ -22,6 +22,16 @@ function HotkeyHints() {
               label: t("hotkeys.clearSelection"),
               id: "clear-selection",
             },
+            {
+              keys: ["meta", "c"],
+              label: t("hotkeys.copyToClipboard"),
+              id: "copy-to-clipboard",
+            },
+            {
+              keys: ["delete"],
+              label: t("hotkeys.deleteSelection"),
+              id: "delete-selection",
+            },
           ]
         : []),
       ...(albumSelected
@@ -35,6 +45,11 @@ function HotkeyHints() {
               keys: ["meta", "a"],
               label: t("hotkeys.selectAll"),
               id: "select-all",
+            },
+            {
+              keys: ["meta", "v"],
+              label: t("hotkeys.pasteFromClipboard"),
+              id: "paste-from-clipboard",
             },
           ]
         : []),

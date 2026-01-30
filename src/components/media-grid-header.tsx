@@ -31,6 +31,7 @@ export default function MediaGridHeader() {
         <SortDirection />
         <ColumnsSlider />
       </div>
+      <div data-tauri-drag-region className="h-full flex-1" />
       <AlbumActions />
     </div>
   );

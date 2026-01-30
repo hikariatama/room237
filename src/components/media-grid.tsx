@@ -2,7 +2,6 @@
 
 import { MediaItem } from "@/components/media-item";
 import { FAVORITES_ALBUM_ID, MAX_COLS } from "@/lib/consts";
-import { useActiveAlbum } from "@/lib/hooks/use-active-album";
 import { useSortedMedia } from "@/lib/hooks/use-sorted-media";
 import { useUpload } from "@/lib/hooks/use-upload";
 import { isMedia } from "@/lib/utils";
@@ -48,7 +47,19 @@ export default function MediaGrid({
   const layout = useRoom237((state) => state.layout);
   const loadingAlbumId = useRoom237((state) => state.loadingAlbumId);
   const isLoadingAlbum = loadingAlbumId !== null;
-  const activeAlbum = useActiveAlbum();
+  const activeAlbum = useStoreWithEqualityFn(
+    useRoom237,
+    (state) => {
+      if (!state.activeAlbumId) return null;
+      const album = state.albumsById[state.activeAlbumId];
+      if (!album) return null;
+      return {
+        albumId: album.albumId,
+        path: album.path,
+      };
+    },
+    (a, b) => a?.albumId === b?.albumId && a?.path === b?.path,
+  );
   const albumMedia = useStoreWithEqualityFn(
     useRoom237,
     (state) => {

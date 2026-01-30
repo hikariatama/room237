@@ -7,18 +7,21 @@ import { cn } from "@/lib/utils";
 
 type ScrollAreaProps = React.ComponentProps<typeof ScrollAreaPrimitive.Root> & {
   viewportRef?: React.Ref<HTMLDivElement>;
+  orientation?: "vertical" | "horizontal" | "both";
 };
 
 function ScrollArea({
   className,
   children,
   viewportRef,
+  orientation = "vertical",
   ...props
 }: ScrollAreaProps) {
   return (
     <ScrollAreaPrimitive.Root
       data-slot="scroll-area"
-      className={cn("relative", className)}
+      // ? Override radix's bs display: table
+      className={cn("relative [&>div>div]:block!", className)}
       {...props}
     >
       <ScrollAreaPrimitive.Viewport
@@ -28,7 +31,12 @@ function ScrollArea({
       >
         {children}
       </ScrollAreaPrimitive.Viewport>
-      <ScrollBar />
+      {(orientation === "vertical" || orientation === "both") && (
+        <ScrollBar orientation="vertical" />
+      )}
+      {(orientation === "horizontal" || orientation === "both") && (
+        <ScrollBar orientation="horizontal" />
+      )}
       <ScrollAreaPrimitive.Corner />
     </ScrollAreaPrimitive.Root>
   );

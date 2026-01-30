@@ -7,6 +7,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 use ffmpeg_sidecar::{child::FfmpegChild, command::FfmpegCommand};
 #[cfg(target_family = "unix")]
 use libc;
@@ -15,8 +18,6 @@ use once_cell::sync::Lazy;
 use crate::settings::read_settings;
 
 pub static STORE_WRITE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-
-static HWACCEL_METHOD: Lazy<Option<String>> = Lazy::new(detect_hwaccel);
 
 pub fn newer_than(a: &Path, b: &Path) -> io::Result<bool> {
     Ok(a.metadata()?.modified()? >= b.metadata()?.modified()?)
@@ -32,40 +33,12 @@ pub fn has_extension(path: &Path, exts: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
-fn detect_hwaccel() -> Option<String> {
-    let output = Command::new(ffmpeg_sidecar::paths::ffmpeg_path())
-        .arg("-hwaccels")
-        .stdout(Stdio::piped())
-        .output()
-        .ok()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let preferred: &[&str] = if cfg!(target_os = "macos") {
-        &["videotoolbox"]
-    } else {
-        &["vaapi", "cuda", "qsv", "dxva2", "videotoolbox"]
-    };
-    for line in stdout.lines() {
-        let accel = line.trim();
-        for candidate in preferred {
-            if accel == *candidate {
-                return Some(accel.to_string());
-            }
-        }
-    }
-    None
-}
-
 pub fn apply_ffmpeg_tuning(cmd: &mut FfmpegCommand, is_video: bool) {
     let settings = read_settings();
     let threads = settings.ffmpeg.threads.resolved();
     let hwaccel = settings.ffmpeg.hwaccel.to_ascii_lowercase();
     if is_video {
         match hwaccel.as_str() {
-            "auto" => {
-                if let Some(accel) = HWACCEL_METHOD.as_ref() {
-                    cmd.arg("-hwaccel").arg(accel);
-                }
-            }
             "none" => {}
             other => {
                 cmd.arg("-hwaccel").arg(other);
@@ -81,11 +54,6 @@ pub fn apply_command_tuning(cmd: &mut Command, is_video: bool) {
     let hwaccel = settings.ffmpeg.hwaccel.to_ascii_lowercase();
     if is_video {
         match hwaccel.as_str() {
-            "auto" => {
-                if let Some(accel) = HWACCEL_METHOD.as_ref() {
-                    cmd.arg("-hwaccel").arg(accel);
-                }
-            }
             "none" => {}
             other => {
                 cmd.arg("-hwaccel").arg(other);
@@ -175,6 +143,13 @@ pub fn run_command_with_timeout(
     is_video: bool,
 ) -> Result<Output, String> {
     apply_command_tuning(&mut cmd, is_video);
+
+    #[cfg(target_os = "windows")]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
@@ -254,6 +229,7 @@ pub fn heic_to_jpeg(src: &Path, dst: &Path) -> Result<(), String> {
     log::info!("heic→jpeg {}→{}", src.display(), dst.display());
     let mut cmd = FfmpegCommand::new();
     apply_ffmpeg_tuning(&mut cmd, false);
+    cmd.arg("-hide_banner").arg("-loglevel").arg("error");
     let mut child = cmd
         .input(src.to_string_lossy())
         .arg("-y")

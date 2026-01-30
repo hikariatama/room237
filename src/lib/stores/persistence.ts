@@ -13,6 +13,7 @@ type PersistedState = Pick<
   | "decoyRoot"
   | "contentProtected"
   | "language"
+  | "layout"
 >;
 
 let storePromise: Promise<Store> | null = null;
@@ -42,6 +43,7 @@ export async function loadPersistedState(): Promise<Partial<PersistedState> | nu
       decoyRoot: parsed.decoyRoot ?? null,
       contentProtected: parsed.contentProtected ?? false,
       language: parsed.language ?? "en",
+      layout: parsed.layout ?? "default",
     };
     lastSavedState = merged;
     return merged;
@@ -78,6 +80,7 @@ export function extractPersistedState(state: State): PersistedState {
     decoyRoot: state.decoyRoot,
     contentProtected: state.contentProtected,
     language: state.language,
+    layout: state.layout,
   };
 }
 

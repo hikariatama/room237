@@ -1,6 +1,7 @@
 "use client";
 
 import MediaGrid from "@/components/media-grid";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useSortedMedia } from "@/lib/hooks/use-sorted-media";
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -41,9 +42,9 @@ export function MediaScroller() {
 
   return (
     <div className="relative min-h-0 flex-1">
-      <div className="h-full overflow-auto p-1 pr-3" ref={scrollerRef}>
+      <ScrollArea className="h-full p-1 pr-3" viewportRef={scrollerRef}>
         <MediaGrid scrollerRef={scrollerRef} />
-      </div>
+      </ScrollArea>
       <AnimatePresence>
         {showTopFade && (
           <motion.div

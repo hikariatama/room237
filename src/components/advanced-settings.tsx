@@ -19,6 +19,7 @@ import {
   type AdvancedSettings,
 } from "@/lib/settings/schema";
 import { useAdvancedSettings } from "@/lib/settings/store";
+import { useRoom237 } from "@/lib/stores";
 import { IconLoader2 } from "@tabler/icons-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useI18n } from "@/lib/i18n";
@@ -91,6 +92,7 @@ export function AdvancedSettingsPopover({
 }) {
   const { settings, loading, initialized, updateField, refresh, save, reset } =
     useAdvancedSettings();
+  const setAllowOpen = useRoom237((state) => state.setAllowOpen);
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
 
@@ -106,6 +108,7 @@ export function AdvancedSettingsPopover({
   const onSave = async () => {
     try {
       await save();
+      setAllowOpen(true);
       toast.success(t("advanced.saveSuccess"));
       setOpen(false);
     } catch (error) {
@@ -513,15 +516,32 @@ export function AdvancedSettingsPopover({
           <Field
             label={t("advanced.field.ffmpeg.threads")}
             helper={t("advanced.field.ffmpeg.threads.helper")}
-            default="4"
+            default="auto"
           >
-            <Input
-              type="text"
-              value={settings.ffmpeg.threads}
-              onChange={(e) =>
-                updateField(["ffmpeg", "threads"], e.target.value || "auto")
-              }
-            />
+            <div className="flex flex-col gap-1.5">
+              <Slider
+                min={0}
+                max={32}
+                step={1}
+                value={[
+                  settings.ffmpeg.threads === "auto"
+                    ? 0
+                    : typeof settings.ffmpeg.threads === "number"
+                      ? settings.ffmpeg.threads
+                      : 4,
+                ]}
+                onValueChange={(v) => {
+                  const n = v[0] ?? 0;
+                  updateField(["ffmpeg", "threads"], n === 0 ? "auto" : n);
+                }}
+                className="flex-1"
+              />
+              <div className="text-muted-foreground text-xs">
+                {settings.ffmpeg.threads === "auto"
+                  ? "Auto"
+                  : String(settings.ffmpeg.threads)}
+              </div>
+            </div>
           </Field>
           <Field
             label={t("advanced.field.ffmpeg.timeout")}
@@ -577,39 +597,63 @@ export function AdvancedSettingsPopover({
             helper={t("advanced.field.preload.thumbWorkers.helper")}
             default="4"
           >
-            <Input
-              type="number"
-              value={settings.preload.thumbWorkers}
-              onChange={(e) =>
-                updateField(["preload", "thumbWorkers"], Number(e.target.value))
-              }
-            />
+            <div className="flex items-center gap-2">
+              <Slider
+                min={1}
+                max={32}
+                step={1}
+                value={[settings.preload.thumbWorkers]}
+                onValueChange={(v) =>
+                  updateField(["preload", "thumbWorkers"], v[0] ?? 4)
+                }
+                className="flex-1"
+              />
+              <span className="text-muted-foreground w-6 text-right text-xs tabular-nums">
+                {settings.preload.thumbWorkers}
+              </span>
+            </div>
           </Field>
           <Field
             label={t("advanced.field.preload.metaWorkers")}
             helper={t("advanced.field.preload.metaWorkers.helper")}
             default="4"
           >
-            <Input
-              type="number"
-              value={settings.preload.metaWorkers}
-              onChange={(e) =>
-                updateField(["preload", "metaWorkers"], Number(e.target.value))
-              }
-            />
+            <div className="flex items-center gap-2">
+              <Slider
+                min={1}
+                max={32}
+                step={1}
+                value={[settings.preload.metaWorkers]}
+                onValueChange={(v) =>
+                  updateField(["preload", "metaWorkers"], v[0] ?? 4)
+                }
+                className="flex-1"
+              />
+              <span className="text-muted-foreground w-6 text-right text-xs tabular-nums">
+                {settings.preload.metaWorkers}
+              </span>
+            </div>
           </Field>
           <Field
             label={t("advanced.field.preload.hashWorkers")}
             helper={t("advanced.field.preload.hashWorkers.helper")}
             default="4"
           >
-            <Input
-              type="number"
-              value={settings.preload.hashWorkers}
-              onChange={(e) =>
-                updateField(["preload", "hashWorkers"], Number(e.target.value))
-              }
-            />
+            <div className="flex items-center gap-2">
+              <Slider
+                min={1}
+                max={32}
+                step={1}
+                value={[settings.preload.hashWorkers]}
+                onValueChange={(v) =>
+                  updateField(["preload", "hashWorkers"], v[0] ?? 4)
+                }
+                className="flex-1"
+              />
+              <span className="text-muted-foreground w-6 text-right text-xs tabular-nums">
+                {settings.preload.hashWorkers}
+              </span>
+            </div>
           </Field>
           <Field
             label={t("advanced.field.preload.progressEmit")}

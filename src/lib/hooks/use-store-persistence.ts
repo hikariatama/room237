@@ -20,6 +20,7 @@ export function useStorePersistence() {
   const contentProtected = useRoom237((state) => state.contentProtected);
   const privacyEnabled = useRoom237((state) => state.privacyEnabled);
   const language = useRoom237((state) => state.language);
+  const layout = useRoom237((state) => state.layout);
   const [ready, setReady] = useState(false);
 
   const validateRoot = useCallback(async (dir: string | null) => {
@@ -44,6 +45,7 @@ export function useStorePersistence() {
             setDecoyRoot,
             setContentProtected,
             setLanguage: setLanguageState,
+            setLayout,
           } = useRoom237.getState();
 
           if (persisted.columns !== undefined) {
@@ -77,6 +79,9 @@ export function useStorePersistence() {
                 : "";
             setLanguageState(navLang.startsWith("ru") ? "ru" : "en");
           }
+          if (persisted.layout !== undefined) {
+            setLayout(persisted.layout);
+          }
         }
       } finally {
         isInitialized.current = true;
@@ -100,6 +105,7 @@ export function useStorePersistence() {
     decoyRoot,
     contentProtected,
     language,
+    layout,
   ]);
 
   useEffect(() => {
