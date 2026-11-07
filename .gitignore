@@ -1,46 +1,37 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-# dependencies
-/node_modules
-/.pnp
-.pnp.js
-
-# testing
-/coverage
-
-# database
-/prisma/db.sqlite
-/prisma/db.sqlite-journal
-db.sqlite
-
-# next.js
-/.next/
+# Build output and release work directories
+/build/
 /out/
-next-env.d.ts
+target/
+CMakeFiles/
+CMakeCache.txt
+cmake-build-*/
+*.o
+*.obj
 
-# production
-/build
+# Python and tool caches
+__pycache__/
+*.py[cod]
+.venv/
+node_modules/
 
-# misc
-.DS_Store
+# Logs and runtime state from local runs
+*.log
+*.trace
+qa-runs/
+
+# Keys, local QA feeds and profiles: never commit
+*.key
 *.pem
-
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# local env files
-# do not commit any .env files to git, except for the .env.example file. https://create.t3.gg/en/usage/env-variables#using-environment-variables
+*.p12
+release.pub
+qa-feed-public-key.txt
+qt-update.json
+qt-update.json.minisig
 .env
-.env*.local
+.env.*
 
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
-
-# idea files
-.idea
+# Editor, OS and agent settings
+.DS_Store
+.idea/
+.vscode/
+.claude/

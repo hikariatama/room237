@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Room 237</title>
+    <meta
+      name="description"
+      content="Offline photo manager. Albums are folders, photos are files."
+    />
+    <link rel="icon" type="image/png" href="icon.png" />
+    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="site.css" />
+  </head>
+  <body class="site-body">
+    <main class="page site-page">
+      <header class="header site-header">
+        <img class="icon site-icon" src="icon.png" alt="" width="44" height="44" />
+        <div class="title site-title">
+          <h1>Room 237</h1>
+          <p>Offline photo manager. Albums are folders, photos are files.</p>
+        </div>
+        <nav class="actions site-actions">
+          <a class="site-button primary" id="download" href="https://github.com/hikariatama/room237/releases/latest">Download</a>
+          <a class="site-button" href="https://github.com/hikariatama/room237/releases/latest">All platforms</a>
+          <a class="site-button" href="https://github.com/hikariatama/room237">GitHub</a>
+        </nav>
+      </header>
+
+      <section class="stage site-stage" id="stage" aria-label="Room 237 next to the folder it manages">
+        <!-- Mirrors the app window: album sidebar, grid header, masonry. -->
+        <div class="window site-demo" aria-hidden="true">
+          <div class="lights"><i></i><i></i><i></i></div>
+
+          <div class="sidebar-wrap">
+            <aside class="sidebar">
+              <div class="albums" id="albums"></div>
+              <button class="btn ghost new-album" id="new-album" tabindex="-1">
+                <svg viewBox="0 0 24 24"><path d="M12 5l0 14" /><path d="M5 12l14 0" /></svg>
+                New album
+              </button>
+              <div class="sidebar-bottom">
+                <button class="btn outline sm" tabindex="-1">Keyboard shortcuts</button>
+                <button class="btn ghost settings" tabindex="-1">
+                  <svg viewBox="0 0 24 24"><path d="M10.325 4.317c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756 .426 1.756 2.924 0 3.35a1.724 1.724 0 0 0 -1.066 2.573c.94 1.543 -.826 3.31 -2.37 2.37a1.724 1.724 0 0 0 -2.572 1.065c-.426 1.756 -2.924 1.756 -3.35 0a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065" /><path d="M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0" /></svg>
+                </button>
+              </div>
+            </aside>
+          </div>
+
+          <div class="main">
+            <div class="grid-header">
+              <div class="controls">
+                <button class="btn outline" tabindex="-1">
+                  <svg viewBox="0 0 24 24" class="rot90"><path d="M4 6a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v2a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2l0 -2" /><path d="M4 16a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v2a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2l0 -2" /></svg>
+                  Masonry
+                </button>
+                <button class="btn select" tabindex="-1">
+                  <svg viewBox="0 0 24 24"><path d="M5 7h1a2 2 0 0 0 2 -2a1 1 0 0 1 1 -1h6a1 1 0 0 1 1 1a2 2 0 0 0 2 2h1a2 2 0 0 1 2 2v9a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2" /><path d="M9 13a3 3 0 1 0 6 0a3 3 0 0 0 -6 0" /></svg>
+                  Date taken
+                  <svg viewBox="0 0 24 24" class="chevron"><path d="M6 9l6 6l6 -6" /></svg>
+                </button>
+                <button class="btn outline icon" tabindex="-1">
+                  <svg viewBox="0 0 24 24"><path d="M4 6l9 0" /><path d="M4 12l7 0" /><path d="M4 18l7 0" /><path d="M15 15l3 3l3 -3" /><path d="M18 6l0 12" /></svg>
+                </button>
+                <div class="slider">
+                  <div class="track"><div class="range"></div></div>
+                  <div class="thumb">4</div>
+                  <span class="min">2</span>
+                  <span class="max">12</span>
+                </div>
+              </div>
+              <button class="btn destructive" tabindex="-1">
+                <svg viewBox="0 0 24 24"><path d="M4 7l16 0" /><path d="M10 11l0 6" /><path d="M14 11l0 6" /><path d="M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2 -2l1 -12" /><path d="M9 7v-3a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v3" /></svg>
+                Delete album
+              </button>
+            </div>
+            <div class="masonry" id="grid"></div>
+          </div>
+        </div>
+
+        <div class="disk site-demo">
+          <div class="disk-title">~/Photos</div>
+          <ul class="tree" id="tree"></ul>
+        </div>
+
+        <div class="cursor" id="cursor" aria-hidden="true">
+          <svg viewBox="0 0 16 22" width="16" height="22">
+            <path d="M1 1v17l4.5-4.2 3 6.7 2.8-1.2-3-6.6H14z" fill="#fff" stroke="#000" stroke-width="1.2" stroke-linejoin="round" />
+          </svg>
+        </div>
+      </section>
+
+      <footer class="footer site-footer">
+        <a class="avx" href="https://avx.so"><img src="avx.svg" alt="avx.so" width="67" height="13" /></a>
+        <span>
+          <a href="https://github.com/hikariatama/room237/blob/master/LICENSE">AGPL-3.0</a>
+          · Keep a backup
+        </span>
+      </footer>
+    </main>
+    <script src="main.js"></script>
+  </body>
+</html>

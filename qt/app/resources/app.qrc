@@ -1,0 +1,13 @@
+<RCC>
+  <qresource prefix="/">
+    <file>icon.png</file>
+    <file>bg.png</file>
+    <file>flags/en.png</file>
+    <file>flags/ru.png</file>
+    <file>lottie/choose_root.webp</file>
+    <file>lottie/confirm_open.webp</file>
+    <file>lottie/debugger.webp</file>
+    <file>lottie/lockscreen.webp</file>
+    <file>lottie/preloading.webp</file>
+  </qresource>
+</RCC>

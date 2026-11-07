@@ -1,0 +1,139 @@
+# Builds, verifies and tests the Room237 packages on GitHub-hosted runners; uploads them as workflow artifacts.
+# Needs no secrets: the loopback QA feed is signed with a throwaway key, and the release feed is assembled unsigned.
+# release.yml calls this workflow and signs the feed with the production key in a separate job.
+# Toolchains and their checksums: qt/packaging/ci/deps.lock.json, requirements.txt, apt-packages.txt.
+name: packages
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+concurrency:
+  group: packages-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  ROOM237_MIN_FREE_GIB: "3"
+  ROOM237_BUILD_JOBS: "4"
+jobs:
+  fixtures:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Bootstrap
+        run: qt/packaging/ci/bootstrap.sh fixtures "$RUNNER_TEMP/r237"
+      - name: Generate synthetic media
+        run: |
+          mkdir -p "$RUNNER_TEMP/r237/bin"
+          ln -s "$RUNNER_TEMP/r237/deps/ffmpeg/ffmpeg-macos-arm64" "$RUNNER_TEMP/r237/bin/ffmpeg"
+          PATH="$RUNNER_TEMP/r237/bin:$PATH" "$RUNNER_TEMP/r237/venv/bin/python" qt/tests/gen_format_fixtures.py "$RUNNER_TEMP/fixtures/formats"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fixtures
+          path: ${{ runner.temp }}/fixtures
+          if-no-files-found: error
+          retention-days: 7
+
+  macos:
+    needs: fixtures
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-arm64
+            runner: macos-15
+          - target: macos-x86_64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: fixtures
+          path: ${{ runner.temp }}/fixtures
+      - name: Bootstrap
+        run: qt/packaging/ci/bootstrap.sh "${{ matrix.target }}" "$RUNNER_TEMP/r237"
+      - name: Build, verify and test
+        run: qt/packaging/ci/build.sh "${{ matrix.target }}" "$RUNNER_TEMP/r237" "$RUNNER_TEMP/fixtures/formats"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: packages-${{ matrix.target }}
+          path: ${{ runner.temp }}/r237/upload/${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 14
+
+  linux:
+    needs: fixtures
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04@sha256:076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: fixtures
+          path: ${{ runner.temp }}/fixtures
+      - name: Bootstrap
+        run: qt/packaging/ci/bootstrap.sh linux "$RUNNER_TEMP/r237"
+      - name: Build, verify and test
+        run: qt/packaging/ci/build.sh linux "$RUNNER_TEMP/r237" "$RUNNER_TEMP/fixtures/formats"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: packages-linux
+          path: ${{ runner.temp }}/r237/upload/linux
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04@sha256:076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Bootstrap
+        run: qt/packaging/ci/bootstrap.sh windows "$RUNNER_TEMP/r237"
+      - name: Cross-build and verify statically
+        run: qt/packaging/ci/build.sh windows "$RUNNER_TEMP/r237"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: packages-windows
+          path: ${{ runner.temp }}/r237/upload/windows
+          if-no-files-found: error
+          retention-days: 14
+
+  assemble:
+    needs: [macos, linux, windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: packages-*
+          path: ${{ runner.temp }}/packages
+      - name: Bootstrap
+        run: qt/packaging/ci/bootstrap.sh release "$RUNNER_TEMP/r237"
+      - name: Assemble the release layout with an unsigned feed
+        run: |
+          version=$(cat qt/VERSION)
+          "$RUNNER_TEMP/r237/venv/bin/python" qt/packaging/assemble_release.py --unsigned \
+            --repo "$GITHUB_REPOSITORY" --tag "room237-v$version" --out "$RUNNER_TEMP/release" \
+            "$RUNNER_TEMP"/packages/packages-*/packages
+          cat "$RUNNER_TEMP/release/SHA256SUMS"

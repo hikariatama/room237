@@ -1,0 +1,271 @@
+{
+ "comment": "Pinned build inputs. fetch_deps.py downloads them, checks size and SHA-256 and installs them. Update a pin only together with its size and hash.",
+ "versions": {
+  "qt": "6.11.3",
+  "rust": "1.99.1",
+  "python": "3.13.18",
+  "ffmpeg": "9.0.2",
+  "llvm-mingw": "20260616",
+  "appimagetool": "1.9.1",
+  "appimage-runtime": "20251108",
+  "ubuntu-image": "ubuntu:22.04@sha256:076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11"
+ },
+ "artifacts": [
+  {
+   "name": "qt-macos-qtbase",
+   "group": "qt-macos",
+   "url": "https://download.qt.io/online/qtsdkrepository/mac_x64/desktop/qt6_6113/qt6_6113/qt.qt6.6113.clang_64/6.11.3-0-202610220312qtbase-MacOS-MacOS_15-Clang-MacOS-MacOS_15-X86_64-ARM64.7z",
+   "size": 31040190,
+   "sha256": "fb9e4a68f2d217dcea330208a79b087b3f729cc7118ff2ca40be193cf80c7606",
+   "install": "tree",
+   "into": "qt-macos"
+  },
+  {
+   "name": "qt-macos-qtsvg",
+   "group": "qt-macos",
+   "url": "https://download.qt.io/online/qtsdkrepository/mac_x64/desktop/qt6_6113/qt6_6113/qt.qt6.6113.clang_64/6.11.3-0-202610220312qtsvg-MacOS-MacOS_15-Clang-MacOS-MacOS_15-X86_64-ARM64.7z",
+   "size": 415296,
+   "sha256": "ba1e3941d01b00413fa424650191324c42e989719a6ed4f41ce43de7e8fb87a7",
+   "install": "tree",
+   "into": "qt-macos"
+  },
+  {
+   "name": "qt-macos-qtmultimedia",
+   "group": "qt-macos",
+   "url": "https://download.qt.io/online/qtsdkrepository/mac_x64/desktop/qt6_6113/qt6_6113/qt.qt6.6113.addons.qtmultimedia.clang_64/6.11.3-0-202610220312qtmultimedia-MacOS-MacOS_15-Clang-MacOS-MacOS_15-X86_64-ARM64.7z",
+   "size": 54518974,
+   "sha256": "b8827ffa4ceaf86352e672ea3ae7d5e78f787f4da5ab68f33488611d7b7033d1",
+   "install": "tree",
+   "into": "qt-macos"
+  },
+  {
+   "name": "qt-macos-qtimageformats",
+   "group": "qt-macos",
+   "url": "https://download.qt.io/online/qtsdkrepository/mac_x64/desktop/qt6_6113/qt6_6113/qt.qt6.6113.addons.qtimageformats.clang_64/6.11.3-0-202610220312qtimageformats-MacOS-MacOS_15-Clang-MacOS-MacOS_15-X86_64-ARM64.7z",
+   "size": 766302,
+   "sha256": "bb0d218d2661d8c56b83ff025740b42792735771ef804c4e8490ddb6d60a9420",
+   "install": "tree",
+   "into": "qt-macos"
+  },
+  {
+   "name": "qt-linux-qtbase",
+   "group": "qt-linux",
+   "url": "https://download.qt.io/online/qtsdkrepository/linux_x64/desktop/qt6_6113/qt6_6113/qt.qt6.6113.linux_gcc_64/6.11.3-0-202610220312qtbase-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z",
+   "size": 22883961,
+   "sha256": "ce282da4d8a83dc216ed96b715202872d655177189c16205dc5fab09b41a9f09",
+   "install": "tree",
+   "into": "qt-linux"
+  },
+  {
+   "name": "qt-linux-qtsvg",
+   "group": "qt-linux",
+   "url": "https://download.qt.io/online/qtsdkrepository/linux_x64/desktop/qt6_6113/qt6_6113/qt.qt6.6113.linux_gcc_64/6.11.3-0-202610220312qtsvg-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z",
+   "size": 298621,
+   "sha256": "7b71eea32674d6ac8e9b5b1d3819f510c6081619ca440b6cac86fd970942cf7a",
+   "install": "tree",
+   "into": "qt-linux"
+  },
+  {
+   "name": "qt-linux-qtwayland",
+   "group": "qt-linux",
+   "url": "https://download.qt.io/online/qtsdkrepository/linux_x64/desktop/qt6_6113/qt6_6113/qt.qt6.6113.linux_gcc_64/6.11.3-0-202610220312qtwayland-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z",
+   "size": 130352,
+   "sha256": "510a61a415699e83a9d0431c7e3d4621e50776c7f57aefbe0f9a841132e2dd99",
+   "install": "tree",
+   "into": "qt-linux"
+  },
+  {
+   "name": "qt-linux-qtdeclarative",
+   "group": "qt-linux",
+   "url": "https://download.qt.io/online/qtsdkrepository/linux_x64/desktop/qt6_6113/qt6_6113/qt.qt6.6113.linux_gcc_64/6.11.3-0-202610220312qtdeclarative-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z",
+   "size": 129700930,
+   "sha256": "424a4012edd475e21c108df6e297ab034cb786ec91f5fe451d20e3a5540e486d",
+   "install": "tree",
+   "into": "qt-linux"
+  },
+  {
+   "name": "qt-linux-icu",
+   "group": "qt-linux",
+   "url": "https://download.qt.io/online/qtsdkrepository/linux_x64/desktop/qt6_6113/qt6_6113/qt.qt6.6113.linux_gcc_64/6.11.3-0-202610220312icu-linux-Rhel8.6-x86_64.7z",
+   "size": 9660662,
+   "sha256": "16f1e8f409bd9f0b248e36d10deab498d0c1b33d25e0a515a076b1f6b5a1ab28",
+   "install": "tree",
+   "into": "qt-linux/lib"
+  },
+  {
+   "name": "qt-linux-qtmultimedia",
+   "group": "qt-linux",
+   "url": "https://download.qt.io/online/qtsdkrepository/linux_x64/desktop/qt6_6113/qt6_6113/qt.qt6.6113.addons.qtmultimedia.linux_gcc_64/6.11.3-0-202610220312qtmultimedia-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z",
+   "size": 37399646,
+   "sha256": "e2186e997704b4e5e6b7a8250818a198deb45c030a385a28fd64d43de682e5c4",
+   "install": "tree",
+   "into": "qt-linux"
+  },
+  {
+   "name": "qt-linux-qtimageformats",
+   "group": "qt-linux",
+   "url": "https://download.qt.io/online/qtsdkrepository/linux_x64/desktop/qt6_6113/qt6_6113/qt.qt6.6113.addons.qtimageformats.linux_gcc_64/6.11.3-0-202610220312qtimageformats-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z",
+   "size": 427746,
+   "sha256": "05d9f331274a6b4247020f592306975b745a9ef2799b4a01dd7a4b881555d197",
+   "install": "tree",
+   "into": "qt-linux"
+  },
+  {
+   "name": "qt-windows-qtbase",
+   "group": "qt-windows",
+   "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6113/qt6_6113_llvm_mingw/qt.qt6.6113.win64_llvm_mingw/6.11.3-0-202610220312qtbase-Windows-Windows_11_24H2-Clang-Windows-Windows_11_24H2-X86_64.7z",
+   "size": 19979095,
+   "sha256": "f6b4e75f397623ef4e8dfd99693da683d714d6794c8217836c95dff34da30200",
+   "install": "tree",
+   "into": "qt-windows"
+  },
+  {
+   "name": "qt-windows-qtsvg",
+   "group": "qt-windows",
+   "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6113/qt6_6113_llvm_mingw/qt.qt6.6113.win64_llvm_mingw/6.11.3-0-202610220312qtsvg-Windows-Windows_11_24H2-Clang-Windows-Windows_11_24H2-X86_64.7z",
+   "size": 294088,
+   "sha256": "cb90784087c27c8f0531c11aeb0f579228f484b9c7810aea580a0baea9433b72",
+   "install": "tree",
+   "into": "qt-windows"
+  },
+  {
+   "name": "qt-windows-qtmultimedia",
+   "group": "qt-windows",
+   "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6113/qt6_6113_llvm_mingw/qt.qt6.6113.addons.qtmultimedia.win64_llvm_mingw/6.11.3-0-202610220312qtmultimedia-Windows-Windows_11_24H2-Clang-Windows-Windows_11_24H2-X86_64.7z",
+   "size": 21760513,
+   "sha256": "0da0a97dccfd23cfab734e7b7762678f79c87e503bce93c7af56685d0c836663",
+   "install": "tree",
+   "into": "qt-windows"
+  },
+  {
+   "name": "qt-windows-qtimageformats",
+   "group": "qt-windows",
+   "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6113/qt6_6113_llvm_mingw/qt.qt6.6113.addons.qtimageformats.win64_llvm_mingw/6.11.3-0-202610220312qtimageformats-Windows-Windows_11_24H2-Clang-Windows-Windows_11_24H2-X86_64.7z",
+   "size": 466230,
+   "sha256": "fcd2dbcc784870ea967e7680ecb959b9b74e3b6c889aaf7c75df38d9be705daf",
+   "install": "tree",
+   "into": "qt-windows"
+  },
+  {
+   "name": "python-macos-arm64",
+   "group": "python-macos-arm64",
+   "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.13.18%2B20261026-aarch64-apple-darwin-install_only.tar.gz",
+   "size": 25394044,
+   "sha256": "e5af2fde6a937a0e0c795a0c595c4efb70578d57463a2657c819992b9b9acbac",
+   "install": "tree",
+   "into": "python",
+   "strip": 1
+  },
+  {
+   "name": "python-macos-x86_64",
+   "group": "python-macos-x86_64",
+   "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.13.18%2B20261026-x86_64-apple-darwin-install_only.tar.gz",
+   "size": 25155145,
+   "sha256": "708be9e7df297f68bdae589ea9e62a621db5abe7708f79e851c41410347452d1",
+   "install": "tree",
+   "into": "python",
+   "strip": 1
+  },
+  {
+   "name": "python-linux-x86_64",
+   "group": "python-linux-x86_64",
+   "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.13.18%2B20261026-x86_64-unknown-linux-gnu-install_only.tar.gz",
+   "size": 76935188,
+   "sha256": "126343c54daff4068efc1ac269518d0cc202d57857794948103dd1454e8881be",
+   "install": "tree",
+   "into": "python",
+   "strip": 1
+  },
+  {
+   "name": "rustup-macos-arm64",
+   "group": "rust-macos-arm64",
+   "url": "https://static.rust-lang.org/rustup/archive/1.29.3/aarch64-apple-darwin/rustup-init",
+   "size": 11408656,
+   "sha256": "63752a1919a3a4793173ec70f8f212621a7ce38ba6a246095984482f4de20f9f",
+   "install": "file",
+   "into": "rustup-init"
+  },
+  {
+   "name": "rustup-macos-x86_64",
+   "group": "rust-macos-x86_64",
+   "url": "https://static.rust-lang.org/rustup/archive/1.29.3/x86_64-apple-darwin/rustup-init",
+   "size": 13041240,
+   "sha256": "bc107f1fb0228de7fa32413c89c1b305cea9cd256e94b01150cd054128145429",
+   "install": "file",
+   "into": "rustup-init"
+  },
+  {
+   "name": "rustup-linux-x86_64",
+   "group": "rust-linux-x86_64",
+   "url": "https://static.rust-lang.org/rustup/archive/1.29.3/x86_64-unknown-linux-gnu/rustup-init",
+   "size": 21347088,
+   "sha256": "b1c8cb14e30889e7e2999e6b69e62d9e9b9ffc0f4df8180564d306d9680e6c55",
+   "install": "file",
+   "into": "rustup-init"
+  },
+  {
+   "name": "ffmpeg-macos-arm64",
+   "group": "ffmpeg-macos-arm64",
+   "url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip",
+   "size": 28395699,
+   "sha256": "c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924",
+   "install": "member:ffmpeg",
+   "into": "ffmpeg/ffmpeg-macos-arm64"
+  },
+  {
+   "name": "ffmpeg-macos-x86_64",
+   "group": "ffmpeg-macos-x86_64",
+   "url": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/ffmpeg.zip",
+   "size": 33816391,
+   "sha256": "7c6b4125b191cbf773832dc51f424cf2b6bb7da43007d1e066f95909e47cacd4",
+   "install": "member:ffmpeg",
+   "into": "ffmpeg/ffmpeg-macos-x86_64"
+  },
+  {
+   "name": "ffmpeg-linux-x86_64",
+   "group": "linux-deps",
+   "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n9.0.2-39-g7adfbe40dc-linux64-gpl-9.0.tar.xz",
+   "size": 153175100,
+   "sha256": "73e29a56974ae5a651133a04584c7483b21afe941e17dc91d79814a758b608d3",
+   "install": "member:ffmpeg-n9.0.2-39-g7adfbe40dc-linux64-gpl-9.0/bin/ffmpeg",
+   "into": "linux-deps/ffmpeg-linux-x86_64"
+  },
+  {
+   "name": "appimagetool-x86_64",
+   "group": "linux-deps",
+   "url": "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage",
+   "size": 15092216,
+   "sha256": "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0",
+   "install": "file",
+   "into": "linux-deps/appimagetool"
+  },
+  {
+   "name": "appimage-runtime-x86_64",
+   "group": "linux-deps",
+   "url": "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64",
+   "size": 944632,
+   "sha256": "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d",
+   "install": "file",
+   "into": "linux-deps/runtime-x86_64"
+  },
+  {
+   "name": "ffmpeg-windows-x86_64",
+   "group": "windows-deps",
+   "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n9.0.2-39-g7adfbe40dc-win64-gpl-9.0.zip",
+   "size": 195110184,
+   "sha256": "693f3e224bc184b40524a62ca47526cfebaf2504414021b92fe75f677ad868b9",
+   "install": "member:ffmpeg-n9.0.2-39-g7adfbe40dc-win64-gpl-9.0/bin/ffmpeg.exe",
+   "into": "windows-deps/ffmpeg.exe"
+  },
+  {
+   "name": "llvm-mingw-linux-x86_64",
+   "group": "windows-deps",
+   "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64.tar.xz",
+   "size": 82188288,
+   "sha256": "534b92e067b22a6b4441f48ae9240a3341b17825d04d577eab0cf85c44b4deda",
+   "install": "tree",
+   "into": "llvm-mingw",
+   "strip": 1
+  }
+ ]
+}

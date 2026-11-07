@@ -1,0 +1,75 @@
+# Manual release: builds every package from the selected commit (packages.yml), signs the update feed with the
+# production key and creates a DRAFT GitHub release targeting that commit. It never publishes a release, never marks
+# one as latest and never creates a tag; publishing the draft (which creates room237-v<version>) stays a manual step.
+# Requires the "release" environment (with required reviewers) holding the secrets ROOM237_UPDATER_PRIVATE_KEY and,
+# for a password-protected key, ROOM237_UPDATER_KEY_PASSWORD. See qt/packaging/BUILD.md, "Release on GitHub".
+name: release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release; must equal qt/VERSION of the selected commit
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  packages:
+    uses: ./.github/workflows/packages.yml
+
+  draft:
+    needs: packages
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check version and that no release or tag exists yet
+        run: |
+          [[ "$VERSION" == "$(cat qt/VERSION)" ]] || { echo "input $VERSION differs from qt/VERSION" >&2; exit 1; }
+          tag="room237-v$VERSION"
+          if gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName --jq '.[].tagName' | grep -qxF "$tag"; then
+            echo "a release or draft named $tag exists" >&2; exit 1
+          fi
+          if [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$tag" --jq "map(select(.ref == \"refs/tags/$tag\")) | length")" != 0 ]]; then
+            echo "tag $tag exists" >&2; exit 1
+          fi
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: packages-*
+          path: ${{ runner.temp }}/packages
+      - name: Bootstrap
+        run: qt/packaging/ci/bootstrap.sh release "$RUNNER_TEMP/r237"
+      - name: Assemble and sign the update feed
+        env:
+          ROOM237_UPDATER_PRIVATE_KEY: ${{ secrets.ROOM237_UPDATER_PRIVATE_KEY }}
+          ROOM237_UPDATER_KEY_PASSWORD: ${{ secrets.ROOM237_UPDATER_KEY_PASSWORD }}
+        run: |
+          [[ -n "$ROOM237_UPDATER_PRIVATE_KEY" ]] || { echo "secret ROOM237_UPDATER_PRIVATE_KEY is not set" >&2; exit 1; }
+          key_dir=$(mktemp -d "$RUNNER_TEMP/key.XXXXXX")
+          trap 'rm -rf "$key_dir"' EXIT
+          (umask 077; printf '%s\n' "$ROOM237_UPDATER_PRIVATE_KEY" > "$key_dir/updater.key")
+          unset ROOM237_UPDATER_PRIVATE_KEY
+          "$RUNNER_TEMP/r237/venv/bin/python" qt/packaging/assemble_release.py --key "$key_dir/updater.key" \
+            --repo "$GITHUB_REPOSITORY" --tag "$TAG" --out "$RUNNER_TEMP/release" \
+            "$RUNNER_TEMP"/packages/packages-*/packages
+          cat "$RUNNER_TEMP/release/SHA256SUMS"
+      - name: Create the draft release
+        run: |
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --latest=false --target "$GITHUB_SHA" \
+            --title "Room237 $VERSION" \
+            --notes $'See the assets to download this version and install.\n\nFor MacOS, run `sudo xattr -c /Applications/Room237.app` after drag&dropping the app.' \
+            "$RUNNER_TEMP"/release/*
+          state=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName,isDraft --jq ".[] | select(.tagName == \"$TAG\") | .isDraft")
+          [[ "$state" == true ]] || { echo "expected one draft release $TAG, got: $state" >&2; exit 1; }

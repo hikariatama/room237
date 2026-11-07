@@ -1,7 +1,7 @@
 <img width="200" src="https://github.com/user-attachments/assets/d6771462-a81d-4160-b240-ea97e156471f" />
 
 ![open source](https://img.shields.io/badge/open%20source-545454)
-[![GitHub Release](https://img.shields.io/github/v/release/hikariatama/room237)](github.com/hikariatama/room237/releases/latest)
+[![GitHub Release](https://img.shields.io/github/v/release/hikariatama/room237)](https://github.com/hikariatama/room237/releases/latest)
 
 > Lightweight offline photo management tool for those who need absolute privacy.
 
@@ -22,31 +22,28 @@
     <tr>
       <td>Windows</td>
       <td>
-        <a href="https://github.com/hikariatama/room237/releases/latest/download/room237-release-windows-x64-setup.exe">
+        <a href="https://github.com/hikariatama/room237/releases/download/room237-v7.0.0/Room237-7.0.0-windows-x86_64-setup.exe">
           <img src="https://img.shields.io/badge/Setup-x64-67b7d1.svg?logo=windows">
         </a><br>
-        <a href="https://github.com/hikariatama/room237/releases/latest/download/room237-release-windows-x64.msi">
-          <img src="https://img.shields.io/badge/MSI-x64-2d7d9a.svg?logo=windows">
-        </a><br>
-        <a href="https://github.com/hikariatama/room237/releases/latest/download/room237-release-windows-x64.exe">
-          <img src="https://img.shields.io/badge/Portable%20EXE-x64-3a8bd6.svg?logo=windows">
+        <a href="https://github.com/hikariatama/room237/releases/download/room237-v7.0.0/Room237-7.0.0-windows-x86_64-portable.zip">
+          <img src="https://img.shields.io/badge/Portable%20ZIP-x64-3a8bd6.svg?logo=windows">
         </a>
       </td>
     </tr>
     <tr>
       <td>macOS</td>
       <td>
-        <a href="https://github.com/hikariatama/room237/releases/latest/download/room237-release-darwin-x64.dmg">
+        <a href="https://github.com/hikariatama/room237/releases/download/room237-v7.0.0/Room237-7.0.0-macos-x86_64.dmg">
           <img src="https://img.shields.io/badge/DMG-Intel%20x64-D33A54.svg?logo=apple">
         </a><br>
-        <a href="https://github.com/hikariatama/room237/releases/latest/download/room237-release-darwin-aarch64.dmg">
+        <a href="https://github.com/hikariatama/room237/releases/download/room237-v7.0.0/Room237-7.0.0-macos-arm64.dmg">
           <img src="https://img.shields.io/badge/DMG-ARM64-D33A54.svg?logo=apple">
         </a><br>
         <a
-          href="https://github.com/hikariatama/room237/releases/latest/download/room237-release-darwin-aarch64.app.tar.gz">
+          href="https://github.com/hikariatama/room237/releases/download/room237-v7.0.0/Room237-7.0.0-macos-arm64.update.tar.gz">
           <img src="https://img.shields.io/badge/.TAR.GZ-ARM64-D33A54.svg?logo=apple">
         </a><br>
-        <a href="https://github.com/hikariatama/room237/releases/latest/download/room237-release-darwin-x64.app.tar.gz">
+        <a href="https://github.com/hikariatama/room237/releases/download/room237-v7.0.0/Room237-7.0.0-macos-x86_64.update.tar.gz">
           <img src="https://img.shields.io/badge/.TAR.GZ-Intel%20x64-D33A54.svg?logo=apple">
         </a>
       </td>
@@ -54,31 +51,15 @@
     <tr>
       <td>Linux</td>
       <td>
-        <a href="https://github.com/hikariatama/room237/releases/latest/download/room237-release-linux-amd64.AppImage">
+        <a href="https://github.com/hikariatama/room237/releases/download/room237-v7.0.0/Room237-7.0.0-linux-x86_64.AppImage">
           <img src="https://img.shields.io/badge/AppImage-x64-f84e29.svg?logo=linux">
         </a><br>
-        <a
-          href="https://github.com/hikariatama/room237/releases/latest/download/room237-release-linux-aarch64.AppImage">
-          <img src="https://img.shields.io/badge/AppImage-ARM64-f84e29.svg?logo=linux">
-        </a><br>
-        <a href="https://github.com/hikariatama/room237/releases/latest/download/room237-release-linux-amd64.deb">
+        <a href="https://github.com/hikariatama/room237/releases/download/room237-v7.0.0/room237_7.0.0_amd64.deb">
           <img src="https://img.shields.io/badge/DebPackage-x64-FF9966.svg?logo=debian">
         </a><br>
-        <a href="https://github.com/hikariatama/room237/releases/latest/download/room237-release-linux-arm64.deb">
-          <img src="https://img.shields.io/badge/DebPackage-ARM64-FF9966.svg?logo=debian">
+        <a href="https://github.com/hikariatama/room237/releases/download/room237-v7.0.0/Room237-7.0.0-linux-x86_64.tar.gz">
+          <img src="https://img.shields.io/badge/TAR.GZ-x86__64-111111.svg?logo=linux">
         </a><br>
-        <a href="https://github.com/hikariatama/room237/releases/latest/download/room237-release-linux-x86_64.rpm">
-          <img src="https://img.shields.io/badge/RpmPackage-x64-F1B42F.svg?logo=redhat">
-        </a><br>
-        <a href="https://github.com/hikariatama/room237/releases/latest/download/room237-release-linux-aarch64.rpm">
-          <img src="https://img.shields.io/badge/RpmPackage-ARM64-F1B42F.svg?logo=redhat">
-        </a><br>
-        <a href="https://github.com/hikariatama/room237/releases/latest/download/room237-release-linux-x86_64">
-          <img src="https://img.shields.io/badge/Binary-x86__64-111111.svg?logo=linux">
-        </a><br>
-        <a href="https://github.com/hikariatama/room237/releases/latest/download/room237-release-linux-aarch64">
-          <img src="https://img.shields.io/badge/Binary-aarch64-111111.svg?logo=linux">
-        </a>
       </td>
     </tr>
   </tbody>
@@ -95,9 +76,9 @@ Room237 is aimed to solve all of these problems. You can open a folder with fold
 What the app does:
 
 1. Creates meta directories, `.room237-metadata` and `.room237-thumb`. Metadata includes info about photos (date taken, hash, etc.), thumbnails are several KB in size and are used to ensure smooth performance on big libraries.
-2. Converts all HEIC photos into JPG. This is the only destructive action made by the app. It is done because some (or all) web engines do not support displaying HEIC.
+2. Leaves the photos themselves untouched, HEIC included. Files change only when you move or delete them in the app.
 
-All actions are done by the embedded ffmpeg binary.
+Thumbnails and media metadata come from the bundled ffmpeg binary; on macOS, photos are decoded by the system.
 
 ## Usage recommendations
 

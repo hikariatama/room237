@@ -1,0 +1,45 @@
+{
+  "duplicates": {
+    "threshold": 32,
+    "hashSize": "16x16",
+    "hashAlg": "blockhash",
+    "resizeFilter": "nearest",
+    "useThumbnailsFirst": true,
+    "maxFilesPerAlbum": 0
+  },
+  "thumbnails": {
+    "maxDim": 450,
+    "imageWebpQuality": 75,
+    "imageWebpCompressionLevel": 3,
+    "videoSeekSeconds": 1.0,
+    "lockPollMs": 50
+  },
+  "ffmpeg": {
+    "threads": 4,
+    "timeoutSecs": 5,
+    "hwaccel": "auto",
+    "processWaitPollMs": 50
+  },
+  "preload": {
+    "thumbWorkers": 4,
+    "metaWorkers": 4,
+    "hashWorkers": 4,
+    "progressEmitMs": 100,
+    "thumbHashQueueDelayMs": 10,
+    "thumbHashOnlyAfterIdle": true,
+    "thumbHashRetryOnThumbChange": true
+  },
+  "metadata": {
+    "ffmpegProbeTimeoutSecs": 5,
+    "parseCreationTime": true
+  },
+  "album": {
+    "renameCleanupDelaySecs": 1,
+    "moveRenameThumbsAndMeta": true
+  },
+  "privacy": {
+    "enabled": false,
+    "lockscreenEnabled": false,
+    "confirmOpenEnabled": false
+  }
+}

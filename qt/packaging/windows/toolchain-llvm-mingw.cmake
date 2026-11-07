@@ -1,0 +1,16 @@
+# CMake toolchain for the Windows x64 cross-build with llvm-mingw.
+# Reads LLVM_MINGW (llvm-mingw root) and QT_WIN (Qt for mingw/llvm x64) from the environment.
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR x86_64)
+if(NOT DEFINED ENV{LLVM_MINGW} OR NOT DEFINED ENV{QT_WIN})
+  message(FATAL_ERROR "set LLVM_MINGW and QT_WIN")
+endif()
+set(TC $ENV{LLVM_MINGW})
+set(CMAKE_C_COMPILER ${TC}/bin/x86_64-w64-mingw32-clang)
+set(CMAKE_CXX_COMPILER ${TC}/bin/x86_64-w64-mingw32-clang++)
+set(CMAKE_RC_COMPILER ${TC}/bin/x86_64-w64-mingw32-windres)
+set(CMAKE_FIND_ROOT_PATH ${TC}/x86_64-w64-mingw32 $ENV{QT_WIN})
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
