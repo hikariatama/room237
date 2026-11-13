@@ -17,6 +17,8 @@ libgl1-mesa-dev
 libglib2.0-0
 libgstreamer1.0-0
 libpulse0
+libudev-dev
+libtss2-dev
 libwayland-cursor0
 libwayland-egl1
 libx11-xcb1

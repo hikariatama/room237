@@ -20,16 +20,12 @@ def wait(fn, timeout=8, step=.05):
         if fn(): return True
         time.sleep(step)
     return bool(fn())
-# A copy of the app whose core is the proxy; the real core stays next to it.
-bundle = work / "app"
+# The app talks to its core through the proxy, which runs the app's own core server.
 macos = source / "Contents/MacOS" if (source / "Contents/MacOS").is_dir() else source
-shutil.copytree(source, bundle / source.name, symlinks=True) if (source / "Contents").is_dir() else shutil.copytree(source, bundle / "dir", symlinks=True)
-copy = bundle / (source.name if (source / "Contents").is_dir() else "dir")
-bin_dir = copy / "Contents/MacOS" if (copy / "Contents").is_dir() else copy
-(bin_dir / "room237-core").rename(bin_dir / "room237-core.real")
-shutil.copy(Path(__file__).parent / "listing_proxy.py", bin_dir / "room237-core")
-(bin_dir / "room237-core").chmod(0o755)
-binary = next(p for p in bin_dir.iterdir() if p.name in ("Room237", "room237"))
+binary = next(p for p in macos.iterdir() if p.name in ("Room237", "room237"))
+proxy = work / "listing_proxy.py"
+shutil.copy(Path(__file__).parent / "listing_proxy.py", proxy)
+proxy.chmod(0o755)
 def library(root, names):
     for i, name in enumerate(names):
         (root / name).mkdir(parents=True)
@@ -39,7 +35,7 @@ class Run:
     def __init__(self, name, albums=("Open", "Other")):
         self.dir = work / name; self.root = self.dir / "lib"; library(self.root, albums)
         self.control = self.dir / "proxy.json"; self.control.write_text("{}")
-        self.app = App(binary, self.root, self.dir / "profile", log=self.dir / "app.log", env={"LISTING_PROXY_CONTROL": str(self.control)})
+        self.app = App(binary, self.root, self.dir / "profile", log=self.dir / "app.log", env={"LISTING_PROXY_CONTROL": str(self.control), "ROOM237_QA_CORE_PROCESS": str(proxy), "LISTING_PROXY_APP": str(binary)})
         self.app.wait_albums(); self.app.wait_idle(120)
     def count(self):
         try: return int((Path(str(self.control) + ".count")).read_text())

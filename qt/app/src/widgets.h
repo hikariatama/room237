@@ -133,6 +133,21 @@ private:
   int radius_ = Theme::kRadius3xl;
   QVariantAnimation spin_;
 };
+// A text field whose rounded frame is drawn with antialiasing; style sheet borders break apart at a radius of half the
+// height. The frame follows the height.
+class TextField : public QLineEdit {
+public:
+  explicit TextField(const QString &text = {}, QWidget *parent = nullptr);
+  // Height and text size; the style sheet would override a fixed height or a font set directly.
+  void setMetrics(int height, int fontPixels = 16);
+  void setRadius(qreal radius) { radius_ = radius; update(); }  // Half the height when negative.
+protected:
+  void paintEvent(QPaintEvent *event) override;
+  void focusInEvent(QFocusEvent *event) override;
+  void focusOutEvent(QFocusEvent *event) override;
+private:
+  qreal radius_ = -1;
+};
 class Switch : public QAbstractButton {
   Q_OBJECT
 public:

@@ -186,7 +186,7 @@ def main():
         check('Windows platform plugin',(plugins/'platforms/qwindows.dll').exists())
         check('Windows styles',bool(list((plugins/'styles').glob('*.dll'))))
         check('Windows icon',(root/'room237.ico').is_file())
-        check('updater helper source present',(root/'room237-core.exe').is_file(),'Rust core copies itself to room237-update-helper.exe beside the plan; no separate helper is shipped')
+        check('updater helper present',(root/'room237-core.exe').is_file(),'the app copies room237-core.exe to room237-update-helper.exe beside the plan')
         nsi=Path(__file__).parent/'windows/room237.nsi'
         if nsi.is_file():
             script=nsi.read_text()
@@ -253,10 +253,10 @@ def main():
         notices=(licenses/'THIRD_PARTY_NOTICES.md').read_text()
         check('Qt LGPL notice','LGPL-3.0' in notices and 'Qt' in notices)
         check('FFmpeg notice','FFmpeg' in notices and 'GPL' in notices)
-    check('Rust SBOM',(licenses/'sbom-core.json').is_file())
+    check('core SBOM',(licenses/'sbom-core.json').is_file())
     if (licenses/'sbom-core.json').is_file():
         bom=json.loads((licenses/'sbom-core.json').read_text())
-        check('Rust SBOM entries',any(c.get('purl','').startswith('pkg:cargo/') for c in bom['components']),len(bom['components']))
+        check('core SBOM entries',{'SQLite','libwebp','Monocypher','zlib','libfido2','libcbor','OpenSSL'} <= {c.get('name') for c in bom['components']},len(bom['components']))
     check('bundled ffmpeg',ffmpeg.is_file())
     if a.platform!='windows':
         home=a.report.parent/'ffmpeg-synthetic-home'; home.mkdir(exist_ok=True)

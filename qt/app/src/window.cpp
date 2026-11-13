@@ -37,6 +37,8 @@
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWindow>
+#include "secure_media.h"
+#include "vault_ops.h"
 static const QStringList kMediaExtensions = {QStringLiteral("jpg"), QStringLiteral("jpeg"), QStringLiteral("png"), QStringLiteral("webp"), QStringLiteral("avif"), QStringLiteral("gif"), QStringLiteral("bmp"), QStringLiteral("heic"), QStringLiteral("heif"), QStringLiteral("tif"), QStringLiteral("tiff"), QStringLiteral("mp4"), QStringLiteral("mov"), QStringLiteral("mkv"), QStringLiteral("webm"), QStringLiteral("avi"), QStringLiteral("flv"), QStringLiteral("m4v"), QStringLiteral("ogg"), QStringLiteral("ogv"), QStringLiteral("wmv"), QStringLiteral("mpg"), QStringLiteral("mpeg"), QStringLiteral("3gp"), QStringLiteral("mts"), QStringLiteral("m2ts")};
 static bool isMediaFile(const QString &path) { return kMediaExtensions.contains(QFileInfo(path).suffix().toLower()); }
 // A shortcut works on a Russian layout too: the physical key stays the same.
@@ -103,7 +105,7 @@ private:
   QString text_;
   qreal fraction_ = 0;
 };
-MainWindow::MainWindow(const QString &coreBinary, const QString &profile, const QString &root, const QString &legacyProfile) : model_(&core_), pipeline_(4, envMegabytes("ROOM237_CACHE_MB", 96)), profile_(profile), cliRoot_(root) {
+MainWindow::MainWindow(const QString &profile, const QString &root, const QString &legacyProfile) : model_(&core_), pipeline_(4, envMegabytes("ROOM237_CACHE_MB", 96)), profile_(profile), cliRoot_(root) {
   setWindowTitle(QStringLiteral("Room237"));
   setMinimumSize(1000, 450);
   loadUiState();
@@ -156,7 +158,7 @@ MainWindow::MainWindow(const QString &coreBinary, const QString &profile, const 
   inactivity_.setSingleShot(true);
   inactivity_.setInterval(5 * 60 * 1000);
   connect(&inactivity_, &QTimer::timeout, this, [this] {
-    if (lockscreenEnabled_ && !locked_) setLocked(true);
+    if ((lockscreenEnabled_ || inProtectedRoot()) && !locked_) setLocked(true);
   });
   windowStateTimer_.setSingleShot(true);
   windowStateTimer_.setInterval(0);
@@ -193,7 +195,7 @@ MainWindow::MainWindow(const QString &coreBinary, const QString &profile, const 
   qApp->installEventFilter(this);
   QStringList arguments{QStringLiteral("--profile"), profile};
   if (!legacyProfile.isEmpty() && QFileInfo(legacyProfile).isDir()) arguments << QStringLiteral("--legacy-profile") << legacyProfile;
-  core_.start(coreBinary, arguments);
+  core_.start(arguments);
   // A migrated state file appears after the core started; read it once more when the core is up.
   core_.call(QStringLiteral("retry_startup"));
   startupScreen_->setBusy(t("startup.checking"));
@@ -288,6 +290,26 @@ void MainWindow::buildContent() {
   sidebarHandle_->installEventFilter(this);
   viewer_ = new Viewer(host_);
   preload_ = new PreloadOverlay(host_);
+  // Worker counts from the processing screen: saved like any setting, and the core follows them at once.
+  workersSave_.setSingleShot(true);
+  workersSave_.setInterval(300);
+  connect(preload_, &PreloadOverlay::workersChanged, this, [this] { workersSave_.start(); });
+  connect(&workersSave_, &QTimer::timeout, this, [this] {
+    core_.call(QStringLiteral("get_settings"), {}, [this](const QJsonValue &value, const QString &error) {
+      if (!error.isEmpty()) return;
+      QJsonObject settings = value.toObject();
+      QJsonObject preload = settings.value(QLatin1String("preload")).toObject();
+      preload[QStringLiteral("thumbWorkers")] = preloadWorkers_[0];
+      preload[QStringLiteral("metaWorkers")] = preloadWorkers_[1];
+      preload[QStringLiteral("encryptWorkers")] = preloadWorkers_[2];
+      settings[QStringLiteral("preload")] = preload;
+      core_.call(QStringLiteral("update_settings"), {{QStringLiteral("settings"), settings}}, [this](const QJsonValue &saved, const QString &failure) {
+        if (failure.isEmpty() && saved.isObject()) onSettings(saved.toObject());
+      });
+    });
+  });
+  connect(preload_, &PreloadOverlay::workersChanged, this, [this](int thumbnails, int metadata, int encryption) { preloadWorkers_ = {thumbnails, metadata, encryption}; });
+  connect(preload_, &PreloadOverlay::blockingChanged, this, &MainWindow::setProcessing);
   dragHint_ = new QLabel(host_);
   dragHint_->setFont(Theme::font(12));
   dragHint_->setStyleSheet(QStringLiteral("color:white;background:rgba(0,0,0,178);border:1px solid rgba(255,255,255,38);border-radius:12px;padding:4px 12px;"));
@@ -316,6 +338,13 @@ void MainWindow::buildContent() {
   lockScreen_->setTexts(t("lock.title"), t("lock.subtitle"));
   lockScreen_->setSubtitleStyle(16, "rgba(255,255,255,128)");
   lockScreen_->hide();
+  vaultScreen_ = new VaultUnlock(host_, &core_);
+  connect(vaultScreen_, &VaultUnlock::unlocked, this, &MainWindow::onVaultUnlocked);
+  vaultRefresh_.setSingleShot(true);
+  vaultRefresh_.setInterval(1500);
+  connect(&vaultRefresh_, &QTimer::timeout, this, [this] {
+    if (!model_.root.isEmpty()) model_.reload({}, true);
+  });
   lockFade_.setStartValue(1.0);
   lockFade_.setEndValue(0.0);
   connect(&lockFade_, &QVariantAnimation::valueChanged, this, [this](const QVariant &v) {
@@ -366,6 +395,7 @@ void MainWindow::buildContent() {
   connect(gallery_, &GalleryView::openRequested, this, &MainWindow::openViewer);
   connect(gallery_, &GalleryView::contextRequested, this, &MainWindow::showMediaMenu);
   connect(gallery_, &GalleryView::dragFinished, this, [this] { tree_->collapseAutoExpandedExcept(model_.album); });
+  connect(gallery_, &GalleryView::exportWithheld, this, [this] { confirmExport([this] { showToast(0, t("security.export.allowed")); }); });
   connect(gallery_, &GalleryView::selectionChanged, this, &MainWindow::updateStatus);
   connect(gallery_, &GalleryView::filesDropped, this, [this](const QStringList &paths) { importPaths(paths, model_.album); });
   connect(gallery_, &GalleryView::copyRequested, this, [this](int index) {
@@ -600,6 +630,8 @@ void MainWindow::loadUiState() {
   ui_.rootDir = o.value(QLatin1String("rootDir")).toString();
   ui_.decoyRoot = o.value(QLatin1String("decoyRoot")).toString();
   ui_.contentProtected = o.value(QLatin1String("contentProtected")).toBool();
+  ui_.hardeningNeverAsk.clear();
+  for (const QJsonValue &root : o.value(QLatin1String("hardeningNeverAsk")).toArray()) ui_.hardeningNeverAsk << root.toString();
   if (const QString language = o.value(QLatin1String("language")).toString(); language == QLatin1String("en") || language == QLatin1String("ru")) ui_.language = language;
   if (const QString layout = o.value(QLatin1String("layout")).toString(); layout == QLatin1String("default") || layout == QLatin1String("apple") || layout == QLatin1String("masonry")) ui_.layout = layout;
   ui_.scroll60 = o.value(QLatin1String("scroll60hz")).toBool();
@@ -608,7 +640,7 @@ void MainWindow::loadUiState() {
 }
 void MainWindow::saveUiState() {
   if (uiRootsRefused_ || !QaFence::rootsAllowed({{QStringLiteral("rootDir"), ui_.rootDir}, {QStringLiteral("decoyRoot"), ui_.decoyRoot}})) return;
-  const QJsonObject o{{QStringLiteral("columns"), ui_.columns}, {QStringLiteral("sortKey"), ui_.sortKey}, {QStringLiteral("sortDir"), ui_.sortDir}, {QStringLiteral("rootDir"), ui_.rootDir.isEmpty() ? QJsonValue() : QJsonValue(ui_.rootDir)}, {QStringLiteral("decoyRoot"), ui_.decoyRoot.isEmpty() ? QJsonValue() : QJsonValue(ui_.decoyRoot)}, {QStringLiteral("contentProtected"), ui_.contentProtected}, {QStringLiteral("language"), ui_.language}, {QStringLiteral("layout"), ui_.layout}, {QStringLiteral("scroll60hz"), ui_.scroll60}, {QStringLiteral("autoUpdate"), ui_.autoUpdate}, {QStringLiteral("sidebarFraction"), ui_.sidebarFraction}};
+  const QJsonObject o{{QStringLiteral("columns"), ui_.columns}, {QStringLiteral("sortKey"), ui_.sortKey}, {QStringLiteral("sortDir"), ui_.sortDir}, {QStringLiteral("rootDir"), ui_.rootDir.isEmpty() ? QJsonValue() : QJsonValue(ui_.rootDir)}, {QStringLiteral("decoyRoot"), ui_.decoyRoot.isEmpty() ? QJsonValue() : QJsonValue(ui_.decoyRoot)}, {QStringLiteral("contentProtected"), ui_.contentProtected}, {QStringLiteral("language"), ui_.language}, {QStringLiteral("layout"), ui_.layout}, {QStringLiteral("scroll60hz"), ui_.scroll60}, {QStringLiteral("autoUpdate"), ui_.autoUpdate}, {QStringLiteral("sidebarFraction"), ui_.sidebarFraction}, {QStringLiteral("hardeningNeverAsk"), QJsonArray::fromStringList(ui_.hardeningNeverAsk)}};
   QSaveFile file(QDir(profile_).filePath(QStringLiteral("ui-state.json")));
   if (file.open(QIODevice::WriteOnly)) {
     file.write(QJsonDocument(o).toJson());
@@ -640,6 +672,8 @@ void MainWindow::onEvent(const QString &name, const QJsonValue &payload) {
     } else if (phase == QLatin1String("error")) {
       startupScreen_->setError(t("startup.error"), o.value(QLatin1String("message")).toString());
     }
+  } else if (name == QLatin1String("vault-progress")) {
+    onVaultProgress(o);
   } else if (name == QLatin1String("hash-progress")) {
     hashDone_ = o.value(QLatin1String("completed")).toInt();
     hashTotal_ = o.value(QLatin1String("total")).toInt();
@@ -671,11 +705,21 @@ void MainWindow::updateHashing() {
   else if (hashTotal_ > 0 && hashDone_ >= hashTotal_) probeDuplicates();
 }
 void MainWindow::onSettings(const QJsonObject &settings) {
+  const QJsonObject preload = settings.value(QLatin1String("preload")).toObject();
+  preloadWorkers_ = {preload.value(QLatin1String("thumbWorkers")).toInt(4), preload.value(QLatin1String("metaWorkers")).toInt(4), preload.value(QLatin1String("encryptWorkers")).toInt(4)};
+  preload_->setWorkers(preloadWorkers_[0], preloadWorkers_[1], preloadWorkers_[2]);
   const QJsonObject privacy = settings.value(QLatin1String("privacy")).toObject();
   privacyEnabled_ = privacy.value(QLatin1String("enabled")).toBool();
   lockscreenEnabled_ = privacyEnabled_ || privacy.value(QLatin1String("lockscreenEnabled")).toBool();
   confirmOpenEnabled_ = privacyEnabled_ || privacy.value(QLatin1String("confirmOpenEnabled")).toBool();
+  const bool hardeningBefore = hardening_;
+  hardening_ = privacy.value(QLatin1String("hardening")).toBool();
+  lockscreenEnabled_ = lockscreenEnabled_ || hardening_;
   updatePrivacySurface();
+  if (hardening_ && !hardeningBefore && settingsLoaded_) {
+    offeredRoots_.clear();
+    offerEncryption();
+  }
   if (lockscreenEnabled_) inactivity_.start();
   else {
     inactivity_.stop();
@@ -683,7 +727,10 @@ void MainWindow::onSettings(const QJsonObject &settings) {
   }
 }
 void MainWindow::updatePrivacySurface() {
-  if (QGuiApplication::platformName() != QLatin1String("offscreen")) Platform::setContentProtected(this, privacyEnabled_ && ui_.contentProtected);
+  // An encrypted root always blocks screenshots, also behind its unlock screen.
+  const bool vaultShown = inProtectedRoot() || vaultScreen_->isVisible();
+  if (QGuiApplication::platformName() != QLatin1String("offscreen")) Platform::setContentProtected(this, (privacyEnabled_ && ui_.contentProtected) || vaultShown);
+  applyExportGate();
   if (!privacyEnabled_ && unfocused_) setUnfocused(false);
   if (privacyEnabled_ && !isActiveWindow() && QGuiApplication::applicationState() != Qt::ApplicationActive) setUnfocused(true);
 }
@@ -708,7 +755,8 @@ void MainWindow::showStartScreens() {
     directoryScreen_->raise();
     return;
   }
-  if (confirmOpenEnabled_) {
+  // An encrypted root asks for its password instead.
+  if (confirmOpenEnabled_ && !vaultStatus(ui_.rootDir).value(QLatin1String("vault")).toBool()) {
     confirmScreen_->setTexts(t("confirmOpen.title"), t("confirmOpen.subtitle", {{"folder", QFileInfo(ui_.rootDir).fileName().toHtmlEscaped()}}));
     confirmScreen_->setGeometry(host_->rect());
     confirmScreen_->show();
@@ -765,6 +813,8 @@ void MainWindow::refreshTexts() {
   for (QAction *action : findChildren<QAction *>())
     if (const QByteArray key = action->property("i18nKey").toByteArray(); !key.isEmpty()) action->setText(t(key.constData()));
   lockScreen_->setTexts(t("lock.title"), t("lock.subtitle"));
+  vaultScreen_->retranslate();
+  preload_->retranslate();
   tree_->setAlbums(model_.albums, model_.favoriteCount);
   dupButton_->setText(t("duplicates.find"));
   layoutControl_->update();
@@ -948,6 +998,24 @@ bool MainWindow::openRoot(const QString &root) {
   }
   missingRoot_.clear();
   directoryScreen_->hide();
+  const QJsonObject vault = vaultStatus(active);
+  if (vault.value(QLatin1String("vault")).toBool() && vault.value(QLatin1String("locked")).toBool()) {
+    // Opening continues once the root is unlocked.
+    showVaultUnlock(active);
+    return true;
+  }
+  // Leaving an encrypted root locks it: its keys and decrypted copies do not outlive the visit.
+  if (!vaultRoot_.isEmpty() && vaultRoot_ != active) {
+    core_.call(QStringLiteral("vault_lock"), {{QStringLiteral("root"), vaultRoot_}});
+    pipeline_.clear();
+    tree_->dropIcons();
+    SecureMedia::clearExports();
+  }
+  vaultRoot_ = vault.value(QLatin1String("vault")).toBool() ? active : QString();
+  vaultScreen_->hide();
+  if (inProtectedRoot()) inactivity_.start();
+  exportAllowed_ = false;
+  updatePrivacySurface();
   model_.setRoot(active);
   model_.album.clear();
   model_.favoritesAlbum = false;
@@ -976,6 +1044,7 @@ bool MainWindow::openRoot(const QString &root) {
       updater_->start();
       emit healthy();
     }
+    offerEncryption();
     // Open the first album when none is selected.
     if (model_.album.isEmpty() && !model_.albums.isEmpty() && !QaFence::enabled()) {
       for (const AlbumInfo &album : model_.albums)
@@ -1556,6 +1625,17 @@ void MainWindow::setItemsDate(const QVector<MediaItem> &items, qint64 timestamp,
 }
 void MainWindow::copyItems(const QVector<MediaItem> &items) {
   if (items.isEmpty()) return;
+  if (inProtectedRoot()) {
+    confirmExport([this, items] {
+      const auto urls = exportUrls(items);
+      if (!urls || urls->isEmpty()) return;
+      auto *mime = new QMimeData;
+      mime->setUrls(*urls);
+      QGuiApplication::clipboard()->setMimeData(mime);
+      showToast(0, I18n::n("toast.filesCopied", urls->size()));
+    });
+    return;
+  }
   auto *mime = new QMimeData;
   QList<QUrl> urls;
   QStringList paths;
@@ -1746,6 +1826,16 @@ SettingsCallbacks MainWindow::settingsCallbacks() {
   c.autoUpdate = [this] { return ui_.autoUpdate; };
   c.scroll60 = [this] { return ui_.scroll60; };
   c.showRootControls = !displayDecoy_ && !locked_;
+  c.vaultState = [this]() -> QString {
+    if (displayDecoy_ || model_.root.isEmpty()) return QStringLiteral("none");
+    const QJsonObject status = vaultStatus(model_.root);
+    if (status.value(QLatin1String("nested")).toBool()) return QStringLiteral("nested");
+    if (!status.value(QLatin1String("vault")).toBool()) return QStringLiteral("none");
+    return status.value(QLatin1String("state")).toString();
+  };
+  c.encryptRoot = [this] { startHardeningSetup(); };
+  c.decryptRoot = [this] { removeEncryption(); };
+  c.replaceFactor = [this] { replaceFactor(); };
   return c;
 }
 void MainWindow::openSettings() {
@@ -1776,6 +1866,10 @@ void MainWindow::openAdvancedSettings() {
   dialog->openAt(QRect(host_->width() / 2, (host_->height() - size.height()) / 2 - 7, 1, 1), Qt::BottomEdge, Qt::AlignHCenter);
 }
 void MainWindow::setLocked(bool locked) {
+  if (locked && inProtectedRoot()) {
+    lockVault();
+    return;
+  }
   if (locked == locked_) return;
   locked_ = locked;
   if (locked) {
@@ -1906,7 +2000,7 @@ void MainWindow::resizeEvent(QResizeEvent *event) {
   sidebar_->setGeometry(8, 8, panel - 8, area.height() - 16);
   sidebarHandle_->setGeometry(panel + 2, 0, 8, area.height());
   rightPane_->setGeometry(panel + 9, 0, area.width() - panel - 9, area.height());
-  for (QWidget *screen : {static_cast<QWidget *>(startupScreen_), static_cast<QWidget *>(directoryScreen_), static_cast<QWidget *>(confirmScreen_), static_cast<QWidget *>(lockScreen_), static_cast<QWidget *>(shield_), static_cast<QWidget *>(preload_), debugger_})
+  for (QWidget *screen : {static_cast<QWidget *>(startupScreen_), static_cast<QWidget *>(directoryScreen_), static_cast<QWidget *>(confirmScreen_), static_cast<QWidget *>(lockScreen_), static_cast<QWidget *>(vaultScreen_), static_cast<QWidget *>(shield_), static_cast<QWidget *>(preload_), debugger_})
     if (screen) screen->setGeometry(area);
   for (HeroScreen *screen : {directoryScreen_, confirmScreen_})
     // Centred 27 points from the corner, mirroring the window buttons on the left.
@@ -1924,6 +2018,8 @@ void MainWindow::moveEvent(QMoveEvent *event) {
 void MainWindow::closeEvent(QCloseEvent *event) {
   closing_ = true;
   saveUiState();
+  SecureMedia::clearExports();
+  core::vault_ops::lockAll();
   QMainWindow::closeEvent(event);
 }
 void MainWindow::changeEvent(QEvent *event) {
@@ -1955,7 +2051,7 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
     }
     return false;
   }
-  if (lockscreenEnabled_ && !locked_ && (event->type() == QEvent::MouseMove || event->type() == QEvent::KeyPress || event->type() == QEvent::MouseButtonPress)) inactivity_.start();
+  if ((lockscreenEnabled_ || inProtectedRoot()) && !locked_ && (event->type() == QEvent::MouseMove || event->type() == QEvent::KeyPress || event->type() == QEvent::MouseButtonPress)) inactivity_.start();
   if (event->type() != QEvent::KeyPress || !object->isWidgetType()) return QMainWindow::eventFilter(object, event);
   auto *key = static_cast<QKeyEvent *>(event);
   auto *widget = static_cast<QWidget *>(object);
@@ -1964,6 +2060,17 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
   if (key->timestamp() == lastKeyStamp_ && key->key() == lastKey_) return false;
   lastKeyStamp_ = key->timestamp();
   lastKey_ = key->key();
+  // While the processing screen is up, keys reach only its own controls; the lock and unlock screens stay above it.
+  const bool lockKey = (lockscreenEnabled_ || inProtectedRoot()) && keyIs(key, QLatin1Char('l')) && !(key->modifiers() & (Qt::ControlModifier | Qt::MetaModifier | Qt::AltModifier));
+  if (preload_->isVisible() && !locked_ && !vaultScreen_->isVisible() && !preload_->isAncestorOf(widget) && !lockKey) return true;
+  if (vaultScreen_->isVisible()) {
+    // Command-U opens the decoy gallery; typing goes to the fields.
+    if (keyIs(key, QLatin1Char('u')) && key->modifiers() & (Qt::ControlModifier | Qt::MetaModifier) && !ui_.decoyRoot.isEmpty()) {
+      onVaultUnlocked(true);
+      return true;
+    }
+    return false;
+  }
   if (locked_) {
     if (keyIs(key, QLatin1Char('u'))) {
       if (key->modifiers() & (Qt::ControlModifier | Qt::MetaModifier) && !ui_.decoyRoot.isEmpty()) {
@@ -1988,9 +2095,175 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
     setDebuggerVisible(false);
     return true;
   }
-  if (lockscreenEnabled_ && keyIs(key, QLatin1Char('l')) && !(key->modifiers() & (Qt::ControlModifier | Qt::MetaModifier | Qt::AltModifier))) {
+  if ((lockscreenEnabled_ || inProtectedRoot()) && keyIs(key, QLatin1Char('l')) && !(key->modifiers() & (Qt::ControlModifier | Qt::MetaModifier | Qt::AltModifier))) {
     setLocked(true);
     return true;
   }
   return false;
+}
+// --- Security hardening ----------------------------------------------------------------------------------------------
+QJsonObject MainWindow::vaultStatus(const QString &root) const {
+  if (root.isEmpty()) return {};
+  try {
+    return core::vault_ops::status(root);
+  } catch (const std::exception &) {
+    return {};
+  }
+}
+void MainWindow::showVaultUnlock(const QString &root) {
+  Popover::closeAll(host_);
+  viewer_->closeViewer();
+  if (duplicatesVisible()) showDuplicates(false);
+  confirmScreen_->hide();
+  directoryScreen_->hide();
+  vaultScreen_->start(root, vaultStatus(root));
+  vaultScreen_->setGeometry(host_->rect());
+  vaultScreen_->show();
+  vaultScreen_->raise();
+  if (shield_->isVisible()) shield_->raise();
+  updatePrivacySurface();
+}
+void MainWindow::onVaultUnlocked(bool decoy) {
+  const QString root = vaultScreen_->root();
+  if (decoy) {
+    // The decoy password shows the decoy gallery as if it were the room; the real root stays locked.
+    if (ui_.decoyRoot.isEmpty() || !rootAllowed(ui_.decoyRoot)) return;
+    vaultScreen_->hide();
+    displayDecoy_ = true;
+    allowOpen_ = true;
+    openRoot(ui_.decoyRoot);
+    updatePrivacySurface();
+    return;
+  }
+  displayDecoy_ = false;
+  allowOpen_ = true;
+  const bool recovered = vaultScreen_->usedRecovery();
+  vaultScreen_->hide();
+  openRoot(root);
+  // The recovery key stands in for a factor that no longer works here.
+  if (recovered) QTimer::singleShot(0, this, &MainWindow::replaceFactor);
+}
+void MainWindow::lockVault() {
+  const QString root = vaultRoot_;
+  core_.call(QStringLiteral("vault_lock"), {{QStringLiteral("root"), root}});
+  Popover::closeAll(host_);
+  viewer_->closeViewer();
+  if (duplicatesVisible()) showDuplicates(false);
+  watcher_.stop();
+  // Nothing decrypted stays in memory or on disk: previews, the open album and copies for other apps.
+  pipeline_.clear();
+  model_.setRoot(QString());
+  model_.album.clear();
+  model_.albums.clear();
+  model_.reload();
+  rebuildTree();
+  tree_->dropIcons();
+  SecureMedia::clearExports();
+  exportAllowed_ = false;
+  vaultRoot_.clear();
+  allowOpen_ = false;
+  showVaultUnlock(root);
+}
+void MainWindow::offerEncryption() {
+  const QString root = model_.root;
+  if (!hardening_ || root.isEmpty() || displayDecoy_ || !albumsReady_ || preload_->isVisible() || offeredRoots_.contains(root) || ui_.hardeningNeverAsk.contains(root)) return;
+  const QJsonObject status = vaultStatus(root);
+  if (status.value(QLatin1String("vault")).toBool() || status.value(QLatin1String("nested")).toBool()) return;
+  offeredRoots_.insert(root);
+  auto *offer = new EncryptOffer(host_, QFileInfo(root).fileName(), [this] { startHardeningSetup(); }, {}, [this, root] {
+    ui_.hardeningNeverAsk << root;
+    saveTimer_.start();
+  });
+  offer->setObjectName(QStringLiteral("encryptOffer"));
+  openCentered(offer);
+}
+void MainWindow::startHardeningSetup() {
+  const QString root = model_.root;
+  if (root.isEmpty() || displayDecoy_) return;
+  ui_.hardeningNeverAsk.removeAll(root);
+  // The decoy password is offered only when there is a decoy gallery to show.
+  auto *setup = new HardeningSetup(host_, &core_, root, privacyEnabled_ && !ui_.decoyRoot.isEmpty(), [this, root] {
+    showToast(0, t("security.toast.encrypting"));
+    if (model_.root == root) openRoot(root);
+  });
+  setup->setObjectName(QStringLiteral("hardeningSetup"));
+  openCentered(setup);
+}
+void MainWindow::removeEncryption() {
+  const QString root = vaultRoot_;
+  if (root.isEmpty()) return;
+  auto *panel = new RemoveEncryption(host_, &core_, root, [this] { showToast(0, t("security.toast.decrypting")); });
+  panel->setObjectName(QStringLiteral("removeEncryption"));
+  openCentered(panel);
+}
+void MainWindow::replaceFactor() {
+  if (vaultRoot_.isEmpty()) return;
+  auto *panel = new ReplaceFactor(host_, &core_, vaultRoot_, [this](const QString &) { showToast(0, t("security.toast.factorAdded")); });
+  panel->setObjectName(QStringLiteral("replaceFactor"));
+  openCentered(panel);
+}
+void MainWindow::onVaultProgress(const QJsonObject &o) {
+  const QString root = o.value(QLatin1String("root")).toString(), phase = o.value(QLatin1String("phase")).toString();
+  const int done = o.value(QLatin1String("done")).toInt(), total = o.value(QLatin1String("total")).toInt();
+  if (root != model_.root) return;
+  const bool running = phase == QLatin1String("encrypting") || phase == QLatin1String("decrypting");
+  if (running && total > 0) {
+    preload_->setVault(phase == QLatin1String("encrypting") ? t("vault.overlay.encrypting") : t("vault.overlay.decrypting"), done, total);
+    if (!vaultRefresh_.isActive()) vaultRefresh_.start();
+    return;
+  }
+  preload_->finishVault();
+  vaultRefresh_.stop();
+  if (phase == QLatin1String("incomplete")) {
+    showToast(1, t("security.toast.incomplete", {{"error", o.value(QLatin1String("error")).toString()}}));
+    return;
+  }
+  if (phase == QLatin1String("encrypted") && total > 0) showToast(0, t("security.toast.encrypted"));
+  if (phase == QLatin1String("decrypted")) showToast(0, t("security.toast.decrypted"));
+  // New names and previews: the room lists itself again.
+  if (phase == QLatin1String("decrypted") || total > 0) openRoot(root);
+}
+void MainWindow::confirmExport(std::function<void()> proceed) {
+  if (exportAllowed_) return proceed();
+  auto *panel = new ConfirmPanel(host_, t("security.export.title"), t("security.export.description"), t("security.export.action"), [this, proceed = std::move(proceed)] {
+    exportAllowed_ = true;
+    proceed();
+  }, false, Popover::DialogSurface);
+  panel->setObjectName(QStringLiteral("exportConfirm"));
+  openCentered(panel);
+}
+std::optional<QList<QUrl>> MainWindow::exportUrls(const QVector<MediaItem> &items) {
+  if (!exportAllowed_) return std::nullopt;
+  QList<QUrl> urls;
+  QString error;
+  for (const MediaItem &item : items) {
+    const QString copy = SecureMedia::isSealed(item.path()) ? SecureMedia::exportCopy(item.path(), item.label(), &error) : item.path();
+    if (!copy.isEmpty()) urls << QUrl::fromLocalFile(copy);
+  }
+  if (!error.isEmpty()) showToast(1, error);
+  return urls;
+}
+void MainWindow::applyExportGate() {
+  if (inProtectedRoot()) gallery_->setExportGate([this](const QVector<MediaItem> &items) { return exportUrls(items); });
+  else gallery_->setExportGate({});
+}
+void MainWindow::setProcessing(bool processing) {
+  // Nothing in the room can be reached while it is being indexed or encrypted: no panels, no shortcuts.
+  if (processing) {
+    Popover::closeAll(host_);
+    disabledActions_.clear();
+    for (QAction *action : actions())
+      if (action->isEnabled()) {
+        action->setEnabled(false);
+        disabledActions_ << action;
+      }
+    // The lock screens and the privacy shield stay on top.
+    if (locked_) lockScreen_->raise();
+    if (vaultScreen_->isVisible()) vaultScreen_->raise();
+    if (shield_->isVisible()) shield_->raise();
+    return;
+  }
+  for (QAction *action : std::exchange(disabledActions_, {}))
+    if (action) action->setEnabled(true);
+  offerEncryption();
 }

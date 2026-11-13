@@ -1,4 +1,7 @@
 #pragma once
+#include <functional>
+#include <optional>
+#include <QUrl>
 // Virtualized gallery. Paints only visible tiles from a bounded image cache on the raster path.
 // Uniform grids need no per-item geometry; masonry, Apple-style and grouped views use the
 // full ordered projection from the core.
@@ -49,12 +52,16 @@ public:
   std::pair<int, int> visibleRange(int extraPixels = 0) const;
   void setEmptyHint(const QString &title, const QString &subtitle, const QByteArray &icon);
   void setBlocked(bool blocked);  // Privacy: no input, no opening, no native drag.
+  // In an encrypted root: the files a drag may hand to other apps, decrypted; nullopt withholds them.
+  using ExportGate = std::function<std::optional<QList<QUrl>>(const QVector<MediaItem> &)>;
+  void setExportGate(ExportGate gate) { exportGate_ = std::move(gate); }
   void focusIndex(int index);
   int focusedIndex() const { return focus_; }
   bool nonUniform() const;
   VirtualListSource accessibleSource();
 signals:
   void dragFinished();
+  void exportWithheld();  // A drag of encrypted files ended outside the app before export was allowed.
   void openRequested(int index);
   void selectionChanged();
   void contextRequested(int index, QPoint global);
@@ -82,6 +89,7 @@ protected:
   void focusOutEvent(QFocusEvent *event) override;
   bool viewportEvent(QEvent *event) override;
 private:
+  ExportGate exportGate_;
   struct Group { QString name; qreal y = 0, end = 0; };
   enum Hit { HitNone, HitFavorite, HitCopy, HitDelete, HitConfirmDelete, HitConfirmCancel };
   void relayout();

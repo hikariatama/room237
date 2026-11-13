@@ -24,7 +24,7 @@ from pathlib import Path
 
 TESTS = Path(__file__).resolve().parent
 SUITES = ['core-package', 'qa-helpers', 'root-fence', 'isolation', 'external-album', 'listing-order', 'formats', 'functional',
-          'near-duplicates', 'duplicate-positive', 'album-create-scope', 'fonts', 'migration', 'update']
+          'near-duplicates', 'duplicate-positive', 'album-create-scope', 'fonts', 'migration', 'hardening', 'formats-encrypted', 'processing', 'update']
 
 
 def clone(source, target):
@@ -142,6 +142,8 @@ def main():
     if 'qa-helpers' in a.suites:
         _, env = fence_env(out / 'fence-probe')
         configure = ['cmake', '-S', TESTS / 'fence_probe', '-B', probe.parent, '-G', 'Ninja', f'-DCMAKE_PREFIX_PATH={qt}', f'-DROOM237_SOURCE_ROOT={source}']
+        if os.environ.get('ROOM237_CORE_SOURCES'):
+            configure.append(f"-DROOM237_CORE_SOURCES={os.environ['ROOM237_CORE_SOURCES']}")
         if a.platform == 'macos':
             configure.append(f'-DCMAKE_OSX_ARCHITECTURES={a.arch}')
         m.run('fence-probe-configure', configure, env, 300)
@@ -194,8 +196,11 @@ def main():
                 'duplicate-positive': [py, TESTS / 'test_duplicate_positive.py', binary, w],
                 'album-create-scope': [py, TESTS / 'test_album_create_scope.py', binary, w],
                 'fonts': [py, TESTS / 'test_fonts.py', binary, w],
+                'hardening': [py, TESTS / 'test_hardening.py', binary, w],
+                'processing': [py, TESTS / 'test_processing.py', binary, w],
+                'formats-encrypted': [py, TESTS / 'test_formats.py', binary, fixture, expected, w, '--encrypted'],
             }[name]
-            if name == 'formats' and a.platform == 'linux':
+            if name in ('formats', 'formats-encrypted') and a.platform == 'linux':
                 command = ['xvfb-run', '-a', '-s', '-screen 0 1440x900x24 -nolisten tcp', *command]
                 env['QT_QPA_PLATFORM'] = 'xcb'
         if name == 'qa-helpers' and not probe.is_file():

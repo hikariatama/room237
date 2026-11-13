@@ -55,6 +55,9 @@ struct SettingsCallbacks {
   std::function<void(QString)> setLanguage;
   std::function<QString()> language, decoyRoot;
   std::function<bool()> privacyEnabled, contentProtected, autoUpdate, scroll60;
+  // Security hardening of the open root: "none", "nested", "encrypting", "encrypted", "decrypting".
+  std::function<QString()> vaultState;
+  std::function<void()> encryptRoot, decryptRoot, replaceFactor;
   QString version;
   bool showRootControls = true;
 };

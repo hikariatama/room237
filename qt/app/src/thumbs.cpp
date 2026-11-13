@@ -7,6 +7,7 @@
 #include <QMetaObject>
 #include <QPainter>
 #include "platform.h"
+#include "secure_media.h"
 #include "qatrace.h"
 #include <QColorSpace>
 #include <QFileInfo>
@@ -24,9 +25,19 @@ static QImage cover(const QImage &source, int size) {
   return out;
 }
 QImage decodeThumbnail(const QString &path, int size, int height) {
-  QImageReader reader(path);
-  reader.setAutoTransform(false);
-  QImage image = reader.read();
+  QImage image;
+  if (SecureMedia::isSealed(path)) {
+    QByteArray bytes = SecureMedia::read(path, 64 << 20);
+    QBuffer buffer(&bytes);
+    buffer.open(QIODevice::ReadOnly);
+    QImageReader reader(&buffer, "webp");
+    reader.setAutoTransform(false);
+    image = reader.read();
+  } else {
+    QImageReader reader(path);
+    reader.setAutoTransform(false);
+    image = reader.read();
+  }
   if (image.isNull()) return {};
   // Thumbnails can carry alpha (PNG, WebP, GIF); the tile background shows through the same as the original.
   if (image.hasAlphaChannel()) {
@@ -41,12 +52,21 @@ QImage decodeThumbnail(const QString &path, int size, int height) {
   return cover(image, size);
 }
 // Formats without a Qt image plugin on this platform. Bounded: the process is killed after 30 seconds.
-static QImage decodeThroughFfmpeg(const QString &path) {
+// `input` is the plaintext of an encrypted file, given to FFmpeg through its standard input.
+static QImage decodeThroughFfmpeg(const QString &path, const QByteArray *input = nullptr) {
   if (gFfmpeg.isEmpty()) return {};
   QProcess process;
   process.setProcessChannelMode(QProcess::SeparateChannels);
-  process.start(gFfmpeg, {QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("error"), QStringLiteral("-nostdin"), QStringLiteral("-i"), path, QStringLiteral("-frames:v"), QStringLiteral("1"), QStringLiteral("-c:v"), QStringLiteral("png"), QStringLiteral("-pix_fmt"), QStringLiteral("rgba"), QStringLiteral("-f"), QStringLiteral("image2pipe"), QStringLiteral("-")});
+  process.start(gFfmpeg, {QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("error"), QStringLiteral("-nostdin"), QStringLiteral("-i"), input ? QStringLiteral("pipe:0") : path, QStringLiteral("-frames:v"), QStringLiteral("1"), QStringLiteral("-c:v"), QStringLiteral("png"), QStringLiteral("-pix_fmt"), QStringLiteral("rgba"), QStringLiteral("-f"), QStringLiteral("image2pipe"), QStringLiteral("-")});
   if (!process.waitForStarted(5000)) return {};
+  if (input) {
+    for (qsizetype offset = 0; offset < input->size() && process.state() == QProcess::Running;) {
+      const qint64 written = process.write(input->constData() + offset, qMin<qsizetype>(1 << 20, input->size() - offset));
+      if (written <= 0) break;
+      offset += written;
+      process.waitForBytesWritten(30000);
+    }
+  }
   process.closeWriteChannel();
   QByteArray bytes;
   QElapsedTimer clock;
@@ -75,7 +95,38 @@ static QImage finished(QImage image) {
   if (image.colorSpace().isValid() && image.colorSpace() != QColorSpace::SRgb) image.convertToColorSpace(QColorSpace::SRgb);
   return image.hasAlphaChannel() ? image.convertToFormat(QImage::Format_ARGB32_Premultiplied) : image.convertToFormat(QImage::Format_RGB32);
 }
+// Encrypted originals decode from memory: Qt's readers detect the format from the content, ImageIO covers HEIC and
+// AVIF, FFmpeg the rest.
+static QImage decodeSealed(const QString &path, QSize box, QSize *fullSize) {
+  QByteArray bytes = SecureMedia::read(path);
+  if (bytes.isEmpty()) return {};
+  QBuffer buffer(&bytes);
+  buffer.open(QIODevice::ReadOnly);
+  QImageReader reader(&buffer);
+  reader.setAutoTransform(true);
+  reader.setAllocationLimit(2048);
+  QImage image;
+  if (reader.canRead()) {
+    QSize size = reader.size();
+    const bool swapped = reader.transformation() & QImageIOHandler::TransformationRotate90;
+    if (swapped) size.transpose();
+    if (fullSize) *fullSize = size;
+    if (box.isValid() && size.isValid() && (size.width() > box.width() || size.height() > box.height()) && reader.supportsOption(QImageIOHandler::ScaledSize)) {
+      const QSize scaled = size.scaled(box, Qt::KeepAspectRatio);
+      reader.setScaledSize(swapped ? scaled.transposed() : scaled);
+    }
+    image = reader.read();
+  }
+  if (image.isNull()) image = Platform::decodeImageNativeData(bytes, box.isValid() ? qMax(box.width(), box.height()) : 0, fullSize);
+  if (image.isNull()) {
+    image = decodeThroughFfmpeg(path, &bytes);
+    if (fullSize) *fullSize = image.size();
+  }
+  if (box.isValid() && (image.width() > box.width() || image.height() > box.height())) image = image.scaled(box, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+  return finished(std::move(image));
+}
 QImage decodeForDisplay(const QString &path, QSize box, QSize *fullSize) {
+  if (SecureMedia::isSealed(path)) return decodeSealed(path, box, fullSize);
   if (needsNativeDecoder(path)) {
     const int side = box.isValid() ? qMax(box.width(), box.height()) : 0;
     QImage image = Platform::decodeImageNative(path, side, fullSize);

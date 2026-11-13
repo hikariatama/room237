@@ -24,7 +24,7 @@ TextPrompt::TextPrompt(QWidget *host, const QString &title, const QString &actio
   layout->setContentsMargins(16, 16, 16, 16);
   layout->setSpacing(12);
   layout->addWidget(label(title, 14, QFont::DemiBold, "#ffffff"));
-  field_ = new QLineEdit(initial);
+  field_ = new TextField(initial);
   field_->setFont(Theme::font(16));  // The style sheet's 16px; the font carries that size's tracking.
   field_->setPlaceholderText(t("album.placeholder"));
   field_->selectAll();
@@ -570,11 +570,11 @@ QWidget *AdvancedDialog::row(const QString &text, const QString &helper, QWidget
   return holder;
 }
 QWidget *AdvancedDialog::numberField(const char *section, const char *key, const char *labelKey, const char *helperKey, int low, int high) {
-  auto *edit = new QLineEdit;
-  edit->setFixedSize(112, 32);
+  auto *edit = new TextField;
+  edit->setMetrics(32, 14);
+  edit->setFixedWidth(112);
   edit->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
   edit->setValidator(new QIntValidator(low, high, edit));
-  edit->setStyleSheet(QStringLiteral("QLineEdit{font-size:14px;min-height:30px;border-radius:16px;}"));
   edit->setAccessibleName(t(labelKey));
   const QString sec = QString::fromLatin1(section), k = QString::fromLatin1(key);
   edit->setText(QString::number(settings_.value(sec).toObject().value(k).toInt()));
@@ -641,9 +641,9 @@ QWidget *AdvancedDialog::enumField(const char *section, const char *key, const c
 }
 QWidget *AdvancedDialog::textField(const char *section, const char *key, const char *labelKey, const char *helperKey) {
   const QString sec = QString::fromLatin1(section), k = QString::fromLatin1(key);
-  auto *edit = new QLineEdit(settings_.value(sec).toObject().value(k).toString());
-  edit->setFixedSize(160, 32);
-  edit->setStyleSheet(QStringLiteral("QLineEdit{font-size:14px;min-height:30px;border-radius:16px;}"));
+  auto *edit = new TextField(settings_.value(sec).toObject().value(k).toString());
+  edit->setMetrics(32, 14);
+  edit->setFixedWidth(160);
   edit->setAccessibleName(t(labelKey));
   connect(edit, &QLineEdit::textEdited, this, [this, sec, k](const QString &value) {
     QJsonObject object = settings_.value(sec).toObject();
@@ -711,6 +711,39 @@ void AdvancedDialog::showSection(const QString &key) {
     add(boolField("privacy", "enabled", "advanced.field.privacyFeatures", "advanced.field.privacyFeatures.helper"), true);
     add(boolField("privacy", "lockscreenEnabled", "advanced.field.lockscreen", "advanced.field.lockscreen.helper"));
     add(boolField("privacy", "confirmOpenEnabled", "advanced.field.confirmOpen", "advanced.field.confirmOpen.helper"));
+    add(boolField("privacy", "hardening", "advanced.field.hardening", "advanced.field.hardening.helper"));
+    // The open root: encrypt it, or remove its encryption.
+    const QString state = app_.vaultState ? app_.vaultState() : QString();
+    if (!state.isEmpty() && state != QLatin1String("nested")) {
+      auto *actions = new QWidget;
+      auto *row = new QHBoxLayout(actions);
+      row->setContentsMargins(0, 0, 0, 0);
+      row->setSpacing(8);
+      const auto action = [this, row](const QString &text, TextButton::Kind kind, const QByteArray &icon, const std::function<void()> &run) {
+        auto *button = new TextButton(text, kind);
+        button->setSmall(true);
+        button->setIcon(icon);
+        row->addWidget(button);
+        connect(button, &QAbstractButton::clicked, this, [this, run] {
+          closeNow();
+          if (run) run();
+        });
+      };
+      QString helper;
+      if (state == QLatin1String("none")) {
+        helper = t("advanced.hardening.plain");
+        action(t("advanced.hardening.encrypt"), TextButton::Primary, "lock", app_.encryptRoot);
+      } else if (state == QLatin1String("encrypted")) {
+        helper = t("advanced.hardening.encrypted");
+        action(t("advanced.hardening.newFactor"), TextButton::Outline, "fingerprint", app_.replaceFactor);
+        action(t("advanced.hardening.decrypt"), TextButton::Danger, "lock-open", app_.decryptRoot);
+      } else {
+        helper = state == QLatin1String("decrypting") ? t("advanced.hardening.decrypting") : t("advanced.hardening.encrypting");
+        if (state == QLatin1String("decrypting")) action(t("advanced.hardening.decrypt"), TextButton::Danger, "lock-open", app_.decryptRoot);
+      }
+      row->addStretch();
+      add(this->row(t("advanced.hardening.root"), helper, actions, "", ""));
+    }
   } else if (key == QLatin1String("duplicates")) {
     add(sliderField("duplicates", "threshold", "advanced.field.duplicates.threshold", "advanced.field.duplicates.threshold.helper", 0, 128), true);
     add(enumField("duplicates", "hashSize", "advanced.field.duplicates.hashSize", "advanced.field.duplicates.hashSize.helper", {{QStringLiteral("8x8"), QStringLiteral("8×8")}, {QStringLiteral("16x16"), QStringLiteral("16×16")}, {QStringLiteral("32x32"), QStringLiteral("32×32")}}));
@@ -732,6 +765,7 @@ void AdvancedDialog::showSection(const QString &key) {
     add(sliderField("preload", "thumbWorkers", "advanced.field.preload.thumbWorkers", "advanced.field.preload.thumbWorkers.helper", 1, 32), true);
     add(sliderField("preload", "metaWorkers", "advanced.field.preload.metaWorkers", "advanced.field.preload.metaWorkers.helper", 1, 32));
     add(sliderField("preload", "hashWorkers", "advanced.field.preload.hashWorkers", "advanced.field.preload.hashWorkers.helper", 1, 32));
+    add(sliderField("preload", "encryptWorkers", "advanced.field.preload.encryptWorkers", "advanced.field.preload.encryptWorkers.helper", 1, 32));
     add(numberField("preload", "progressEmitMs", "advanced.field.preload.progressEmit", "advanced.field.preload.progressEmit.helper", 50, 1000));
     add(numberField("preload", "thumbHashQueueDelayMs", "advanced.field.preload.hashDelay", "advanced.field.preload.hashDelay.helper", 0, 100));
     add(boolField("preload", "thumbHashRetryOnThumbChange", "advanced.field.preload.hashRetry", "advanced.field.preload.hashRetry.helper"));

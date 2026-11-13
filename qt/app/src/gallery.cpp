@@ -1115,8 +1115,12 @@ void GalleryView::startDrag(int index) {
   const int count = selectionCount();
   mime->setData(QString::fromLatin1(kInternalMime), QByteArray::number(count));
   QList<QUrl> urls;
+  QVector<MediaItem> dragged;
   QStringList stackKeys;
-  const auto addUrl = [&](const MediaItem &item) { urls.push_back(QUrl::fromLocalFile(item.path())); };
+  const auto addUrl = [&](const MediaItem &item) {
+    if (exportGate_) dragged.push_back(item);
+    else urls.push_back(QUrl::fromLocalFile(item.path()));
+  };
   if (all_ || count > 2000) {
     if (model_->geometryReady()) {
       for (int i = 0; i < model_->geometry().size(); i++)
@@ -1129,6 +1133,11 @@ void GalleryView::startDrag(int index) {
       if (const MediaItem *item = model_->item(i)) addUrl(*item);
       else if (i < model_->geometry().size() && model_->geometryReady()) addUrl(model_->itemFromGeometry(i));
     }
+  }
+  bool withheld = false;
+  if (exportGate_ && !dragged.isEmpty()) {
+    if (auto exported = exportGate_(dragged)) urls = *exported;
+    else withheld = true;
   }
   if (!urls.isEmpty()) mime->setUrls(urls);
   drag->setMimeData(mime);
@@ -1196,8 +1205,8 @@ void GalleryView::startDrag(int index) {
     if (!flyers.isEmpty()) new DragFlyers(host, std::move(flyers));
   }
   const Qt::DropAction action = drag->exec(Qt::CopyAction | Qt::MoveAction, Qt::MoveAction);
-  Q_UNUSED(action);
   emit dragFinished();
+  if (withheld && action == Qt::IgnoreAction && !window()->frameGeometry().contains(QCursor::pos())) emit exportWithheld();
   if (transient && selected_.size() == 1 && selected_.contains(index)) {
     selected_.clear();
     viewport()->update();
@@ -1346,7 +1355,7 @@ VirtualListSource GalleryView::accessibleSource() {
   };
   source.name = [this](int i) {
     const MediaItem *item = model_->item(visibleRange().first + i);
-    return item ? item->name : QString();
+    return item ? item->label() : QString();
   };
   source.description = [this](int i) {
     const MediaItem *item = model_->item(visibleRange().first + i);

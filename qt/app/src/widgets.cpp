@@ -344,11 +344,33 @@ void Switch::paintEvent(QPaintEvent *) {
   p.drawRoundedRect(rect(), 10, 10);
   p.setBrush(Qt::white);
   p.drawEllipse(QRectF(2 + t * 16 - t * 0, 2, 16, 16));
-  if (hasFocus()) {
-    p.setPen(QPen(QColor(255, 255, 255, 64), 3));
+}
+TextField::TextField(const QString &text, QWidget *parent) : QLineEdit(text, parent) {
+  setAttribute(Qt::WA_MacShowFocusRect, false);
+  setMetrics(36);
+}
+void TextField::setMetrics(int height, int fontPixels) {
+  setStyleSheet(QStringLiteral("QLineEdit{border:none;background:transparent;padding:0 13px;min-height:%1px;max-height:%1px;font-size:%2px;}").arg(height).arg(fontPixels));
+}
+void TextField::paintEvent(QPaintEvent *event) {
+  {
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    const QRectF frame = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    const qreal radius = radius_ < 0 ? frame.height() / 2 : radius_;
+    p.setPen(QPen(hasFocus() ? QColor(0x73, 0x73, 0x73) : QColor(255, 255, 255, isEnabled() ? 26 : 13), 1));
     p.setBrush(Qt::NoBrush);
-    p.drawRoundedRect(QRectF(rect()).adjusted(0, 0, 0, 0), 10, 10);
+    p.drawRoundedRect(frame, radius, radius);
   }
+  QLineEdit::paintEvent(event);
+}
+void TextField::focusInEvent(QFocusEvent *event) {
+  QLineEdit::focusInEvent(event);
+  update();
+}
+void TextField::focusOutEvent(QFocusEvent *event) {
+  QLineEdit::focusOutEvent(event);
+  update();
 }
 NumberSlider::NumberSlider(int low, int high, int value, const QString &label, QWidget *parent) : QWidget(parent), low_(low), high_(high), value_(value), position_(this, 110, value) {
   setFixedSize(144, 36);
@@ -1209,8 +1231,8 @@ DateTimePicker::DateTimePicker(QWidget *parent) : QWidget(parent) {
   }
   month_->setGeometry(76, 0, 110, 36);
   year_->setGeometry(194, 0, 86, 36);
-  hour_ = new QLineEdit(this);
-  minute_ = new QLineEdit(this);
+  hour_ = new TextField({}, this);
+  minute_ = new TextField({}, this);
   hour_->setValidator(new QIntValidator(0, 23, hour_));
   minute_->setValidator(new QIntValidator(0, 59, minute_));
   for (QLineEdit *field : {hour_, minute_}) {

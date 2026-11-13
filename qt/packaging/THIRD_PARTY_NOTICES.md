@@ -4,14 +4,20 @@ Room237 is licensed under AGPL-3.0-only (LICENSE). The packages also contain:
 
 | Component | Version | License | Source |
 |---|---|---|---|
-| Qt (Core, Gui, Widgets, Network, Multimedia, MultimediaWidgets, Svg, DBus on Linux; platform, image and TLS plugins) | 6.11.3 | LGPL-3.0-only, dynamically linked and replaceable | https://download.qt.io/official_releases/qt/6.11/6.11.3/ |
+| Qt (Core, Gui, Widgets, Network, Multimedia, MultimediaWidgets, Svg, Concurrent, DBus on Linux; platform, image and TLS plugins) | 6.11.3 | LGPL-3.0-only, dynamically linked and replaceable | https://download.qt.io/official_releases/qt/6.11/6.11.3/ |
 | FFmpeg libraries bundled with Qt Multimedia | 7.1 series | LGPL-2.1-or-later | https://ffmpeg.org/download.html |
 | FFmpeg command-line tool (`ffmpeg`) | 9.0.2; build details in `ffmpeg -version` | GPL build (GPL-3.0-or-later per its configuration) | https://ffmpeg.org/download.html; builds: https://ffmpeg.martin-riedl.de (macOS), https://github.com/BtbN/FFmpeg-Builds (Linux, Windows) |
 | llvm-mingw runtime (libc++, libunwind) on Windows | clang 22 | Apache-2.0 WITH LLVM-exception | https://github.com/mstorsjo/llvm-mingw |
 | Tabler Icons (embedded SVG paths) | 3.x | MIT | https://github.com/tabler/tabler-icons |
 | Phosphor Icons (two embedded SVG paths) | via react-icons | MIT | https://github.com/phosphor-icons/homepage |
 | Lottie animations rendered to WebP (`qt/app/resources/lottie`, sources in `qt/tools/lottie`) | | carried over from the Tauri version of Room237; origin not separately documented | this repository |
-| Rust crates in `room237-core` | see `sbom-core.json` | SPDX expression or license-file text per crate in `sbom-core.json`; checksums from Cargo.lock | crates.io |
+| SQLite (compiled into the app) | 3.51.1 | Public domain (SQLite blessing) | https://www.sqlite.org/ |
+| libwebp (compiled into the app) | 1.6.0 | BSD-3-Clause | https://chromium.googlesource.com/webm/libwebp |
+| Monocypher, with its optional Ed25519 (compiled into the app) | 4.0.2 | BSD-2-Clause or CC0-1.0, at the recipient's choice | https://monocypher.org/ |
+| zlib (compiled into the app) | 1.3.1 | Zlib | https://zlib.net/ |
+| libfido2 (compiled into the app) | 1.17.0 | BSD-2-Clause | https://developers.yubico.com/libfido2/ |
+| libcbor (compiled into the app) | 0.14.0 | MIT | https://github.com/PJK/libcbor |
+| OpenSSL libcrypto (compiled into the app) | 3.5.9 | Apache-2.0 | https://www.openssl-library.org/source/ |
 
 The packages contain no font files. The interface uses the UI font installed with the operating system (San Francisco
 on macOS, Segoe UI on Windows, the desktop font on Linux). The macOS DMG background is a photograph-style image

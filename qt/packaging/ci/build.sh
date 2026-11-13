@@ -35,10 +35,16 @@ esac
 
 status=0
 if [[ $TARGET != windows ]]; then
-  # Unit tests of the core on the build host.
-  (cd "$ROOT/work/source/qt/core" && CARGO_TARGET_DIR="$ROOT/cache/cargo-test" cargo test --locked -j "${ROOM237_BUILD_JOBS:-6}") \
-    > "$ROOT/cargo-test.log" 2>&1 || status=1
-  tail -3 "$ROOT/cargo-test.log"
+  # Unit tests of the core on the build host, with the pinned ffmpeg on PATH (Linux reads media through it).
+  qt_prefix=${QT_ROOT:-$ROOT/deps/qt-linux}
+  if [[ $TARGET == linux ]]; then ffmpeg_bin=$ROOT/deps/linux-deps/ffmpeg-linux-x86_64; else ffmpeg_bin=$ROOT/deps/ffmpeg/ffmpeg-$TARGET; fi
+  ffmpeg_dir=$ROOT/cache/core-test-bin
+  mkdir -p "$ffmpeg_dir"; ln -sf "$ffmpeg_bin" "$ffmpeg_dir/ffmpeg"
+  { cmake -S "$ROOT/work/source/qt/core" -B "$ROOT/cache/core-tests" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$qt_prefix" \
+      -DROOM237_CORE_TESTS=ON -DROOM237_CORE_SOURCES="$ROOM237_CORE_SOURCES" &&
+    cmake --build "$ROOT/cache/core-tests" -j "${ROOM237_BUILD_JOBS:-6}" &&
+    PATH="$ffmpeg_dir:$PATH" QT_QPA_PLATFORM=offscreen "$ROOT/cache/core-tests/room237_core_tests"; } > "$ROOT/core-test.log" 2>&1 || status=1
+  tail -3 "$ROOT/core-test.log"
   if [[ -n $FIXTURES ]]; then
     if [[ $platform == macos ]]; then
       python "$REPO/qt/tests/run_offscreen.py" --work "$ROOT/work" --platform macos --arch "$arch" --qt "$QT_ROOT" \
@@ -58,7 +64,7 @@ find "$ROOT/work/n/$platform" -maxdepth 1 -type f -exec cp {} "$up/packages/" \;
 cp "$ROOT/work/n/sbom-core.json" "$ROOT/work/n/THIRD_PARTY_NOTICES.md" "$ROOT/work/n/trust-public-key.txt" "$up/packages/"
 cp "$ROOT/work"/{RELEASE.json,SOURCE_SHA256,source-inventory.json,toolchain.json,commands.json} "$up/reports/"
 cp "$ROOT/work"/n/verify-*.json "$up/reports/"
-[[ -f $ROOT/cargo-test.log ]] && cp "$ROOT/cargo-test.log" "$up/reports/"
+[[ -f $ROOT/core-test.log ]] && cp "$ROOT/core-test.log" "$up/reports/"
 [[ -f $ROOT/apt-installed.txt ]] && cp "$ROOT/apt-installed.txt" "$up/reports/"
 for matrix in "$ROOT"/tests/*/matrix.json; do
   [[ -f $matrix ]] && cp "$matrix" "$up/reports/tests-$(basename "$(dirname "$matrix")").json"

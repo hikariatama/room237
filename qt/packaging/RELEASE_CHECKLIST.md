@@ -13,7 +13,7 @@ Windows x64 (NSIS installer, portable zip, unsigned). No ARM64 Linux or Windows 
 
 1. Run the `release` workflow (`BUILD.md`, "Release on GitHub") on the release commit. It builds and tests every
    platform, signs `qt-update.json` with the production key and creates a draft release targeting that commit.
-2. Check the workflow results: verifier reports, `cargo test` and the offscreen suite matrices of macOS arm64,
+2. Check the workflow results: verifier reports, the core unit tests and the offscreen suite matrices of macOS arm64,
    macOS x86_64 and Linux (tar and AppImage), including `test_update.py` N → N+1 on each update payload kind.
 3. Open items the automated runs do not cover; decide on each before publishing:
    - Windows: installer, first start, update, Explorer drag and drop, clipboard and Direct3D video on a real

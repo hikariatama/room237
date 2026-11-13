@@ -95,9 +95,9 @@ def main():
     if missing:
         raise SystemExit('missing release files: ' + ', '.join(missing))
     trust_file = common['trust-public-key.txt']
-    compiled = re.search(r'None => "(RW[A-Za-z0-9+/=]+)"', (HERE.parent / 'core/src/update.rs').read_text()).group(1)
+    compiled = re.search(r'kPublicKey = "(RW[A-Za-z0-9+/=]+)"', (HERE.parent / 'core/src/update.cpp').read_text()).group(1)
     if trust_file.read_text().strip() != compiled:
-        raise SystemExit('trust-public-key.txt is not the updater key in qt/core/src/update.rs')
+        raise SystemExit('trust-public-key.txt is not the updater key in qt/core/src/update.cpp')
     a.out.mkdir(parents=True)
     out = a.out.resolve()
     for f in list(packages.values()) + list(common.values()):

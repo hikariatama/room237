@@ -299,7 +299,7 @@ class FenceTests(unittest.TestCase):
             binary = closure / BINARY.name
         else:
             shutil.copy2(BINARY, binary)
-        core = binary.parent / 'room237-core'
+        core = folder / 'forged-core.py'
         core.write_text("#!/usr/bin/env python3\n" +
             "import sys,json,os\n" +
             "for line in sys.stdin:\n" +
@@ -309,7 +309,7 @@ class FenceTests(unittest.TestCase):
             " print(json.dumps({'id':r['id'],'result':v}),flush=True)\n")
         core.chmod(0o755)
         profile = self.work / 'canonical-reply-profile'
-        app = App(binary, self.allowed, profile, env=dict(self.env, FENCE_TEST_CANONICAL_REPLY=str(self.repo)),
+        app = App(binary, self.allowed, profile, env=dict(self.env, FENCE_TEST_CANONICAL_REPLY=str(self.repo), ROOM237_QA_CORE_PROCESS=str(core)),
                   log=self.output / 'canonical-reply.log')
         self.addCleanup(app.close)
         app.wait_albums()

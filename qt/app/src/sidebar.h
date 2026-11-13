@@ -14,6 +14,7 @@ public:
   explicit AlbumTree(QWidget *parent = nullptr);
   ~AlbumTree() override;
   void setAlbums(const QVector<AlbumInfo> &albums, int favorites);
+  void dropIcons() { icons_.clear(); }  // Album covers of a root that was just locked.
   void setActive(const QString &id);
   QString active() const { return active_; }
   QRect rectFor(const QString &albumId) const;

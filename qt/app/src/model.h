@@ -5,18 +5,22 @@
 #include <QImage>
 #include <QVector>
 struct MediaItem {
-  QString name, revision, albumPath, albumId, albumName, thumbName, blur;
+  // name is the file on disk; in an encrypted root a random one, with the original in displayName.
+  QString name, revision, albumPath, albumId, albumName, thumbName, blur, displayName;
   bool favorite = false, isVideo = false;
   int width = 0, height = 0;
   double dateAdded = 0, dateTaken = 0;
   QString path() const { return albumPath + QLatin1Char('/') + name; }
   QString thumbPath() const { return albumPath + QStringLiteral("/.room237-thumb/") + (thumbName.isEmpty() ? name + QStringLiteral(".webp") : thumbName); }
   double displayDate() const { return dateTaken > 0 ? dateTaken : dateAdded; }
+  QString label() const { return displayName.isEmpty() ? name : displayName; }
+  QString extension() const;  // Lowercase, of the original name.
 };
 struct GeometryItem {
   QString name, revision, albumId, albumName;
   int width = 1, height = 1;
   bool favorite = false;
+  QString displayName;
 };
 MediaItem mediaFromJson(const QJsonObject &o);
 struct AlbumInfo {

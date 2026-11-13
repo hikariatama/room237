@@ -22,6 +22,7 @@ void applyApplicationFont();
 void paintPage(QPainter &painter, const QRect &rect, const QPoint &windowOffset, int whiteAlpha = 0);
 // backdrop-blur: a blurred copy of what lies under rect, taken once when a surface opens.
 QPixmap frostedCopy(QWidget *source, const QRect &rect, int radius);
+QPixmap frosted(QImage image, const QSize &size, qreal ratio, int radius);  // A rendered image of `size` points.
 QEasingCurve bezier(qreal x1, qreal y1, qreal x2, qreal y2);
 QFont font(int pixelSize = 14, QFont::Weight weight = QFont::Normal);
 // SVG icon rendered once per name, size, colour and device ratio.

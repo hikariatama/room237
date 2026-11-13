@@ -241,7 +241,8 @@ try:
                    ROOM237_QA_PORT="1", ROOM237_QA_FENCE=path_map(fence),
                    ROOM237_QA_UPDATE_FIXTURE=json.dumps(config), QT_QPA_PLATFORM="offscreen")
         def rpc(method, params, environment=env):
-            proc = run((wrapper or []) + [str(core), "--profile", path_map(direct)],
+            # The core runs inside the application; QA builds serve its protocol on standard input and output.
+            proc = run((wrapper or []) + [str(binary), "--qa-core-server", "--profile", path_map(direct)],
                        input=json.dumps(dict(id=1, method=method, params=params))+"\n",
                        text=True, capture_output=True, env=environment)
             return next(json.loads(line) for line in proc.stdout.splitlines() if json.loads(line).get("id") == 1)

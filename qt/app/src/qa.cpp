@@ -1,4 +1,5 @@
 #include "qa.h"
+#include "security.h"
 #include "widgets.h"
 #include "i18n.h"
 #include <QAbstractButton>
@@ -385,10 +386,11 @@ void QaDriver::handle(const QJsonObject &c) {
     if (!a) return fail(id, QStringLiteral("album missing"));
     w_->activateAlbum(a->id, [=, this] {
       w_->model()->loadAll([=, this](QVector<MediaItem> items) {
-        QStringList names;
-        for (const auto &m : items) names << m.name;
+        QStringList names, labels;
+        for (const auto &m : items) names << m.name, labels << m.label();
         names.sort();
-        reply(id, QJsonObject{{QStringLiteral("total"), w_->model()->total()}, {QStringLiteral("names"), QJsonArray::fromStringList(names)}});
+        labels.sort();
+        reply(id, QJsonObject{{QStringLiteral("total"), w_->model()->total()}, {QStringLiteral("names"), QJsonArray::fromStringList(names)}, {QStringLiteral("labels"), QJsonArray::fromStringList(labels)}});
       });
     });
   } else if (op == QLatin1String("prepare_entries")) {
@@ -400,7 +402,7 @@ void QaDriver::handle(const QJsonObject &c) {
       w_->model()->loadAll([=, this](QVector<MediaItem> items) {
         pendingEntries_.clear();
         for (const auto &m : items)
-          if (want.contains(m.name)) pendingEntries_.push_back(m);
+          if (want.contains(m.name) || want.contains(m.label())) pendingEntries_.push_back(m);
         if (pendingEntries_.size() != want.size()) return fail(id, QStringLiteral("entries mismatch"));
         reply(id, QJsonObject{{QStringLiteral("count"), pendingEntries_.size()}});
       });
@@ -554,6 +556,86 @@ void QaDriver::handle(const QJsonObject &c) {
     reply(id, QJsonObject{{QStringLiteral("zoom"), w_->viewer()->zoom()}});
   } else if (op == QLatin1String("privacy_state")) {
     reply(id, QJsonObject{{QStringLiteral("locked"), w_->locked()}, {QStringLiteral("shielded"), w_->shielded()}, {QStringLiteral("decoy"), w_->displayDecoy()}, {QStringLiteral("privacy"), w_->privacyEnabled()}, {QStringLiteral("lockscreen"), w_->lockscreenEnabled()}, {QStringLiteral("root"), w_->model()->root}});
+  } else if (op == QLatin1String("vault_state")) {
+    QJsonObject out = w_->vaultScreen()->qaState();
+    out.insert(QStringLiteral("protected"), w_->inProtectedRoot());
+    out.insert(QStringLiteral("root"), w_->model()->root);
+    out.insert(QStringLiteral("decoy"), w_->displayDecoy());
+    out.insert(QStringLiteral("unlockRoot"), w_->vaultScreen()->root());
+    QJsonArray panels;
+    for (Popover *panel : w_->overlayHost()->findChildren<Popover *>())
+      if (panel->isOpen() && !panel->objectName().isEmpty()) panels.append(panel->objectName());
+    out.insert(QStringLiteral("panels"), panels);
+    reply(id, out);
+  } else if (op == QLatin1String("vault_unlock_ui")) {
+    w_->vaultScreen()->qaSubmit(str("password"), str("recoveryKey"), c.value(QLatin1String("recovery")).toBool(), c.value(QLatin1String("secondary")).toBool());
+    until([this] { return !w_->vaultScreen()->qaState().value(QLatin1String("busy")).toBool(); }, 30000, [=, this](bool ok) {
+      if (!ok) return fail(id, QStringLiteral("unlock did not finish"));
+      reply(id, w_->vaultScreen()->qaState());
+    });
+  } else if (op == QLatin1String("encrypt_offer")) {
+    auto *offer = w_->overlayHost()->findChild<EncryptOffer *>();
+    if (!offer || !offer->isOpen()) return fail(id, QStringLiteral("no encryption offer"));
+    offer->qaChoose(str("choice"));
+    reply(id, QJsonObject{{QStringLiteral("ms"), ms()}});
+  } else if (op == QLatin1String("hardening_setup")) {
+    const auto find = [this]() -> HardeningSetup * {
+      for (auto *setup : w_->overlayHost()->findChildren<HardeningSetup *>())
+        if (setup->isOpen()) return setup;
+      return nullptr;
+    };
+    until([find] { return find() && find()->qaFactorsLoaded(); }, 5000, [=, this](bool open) {
+      if (!open) return fail(id, QStringLiteral("setup is not open"));
+      QStringList kinds;
+      for (const QJsonValue &kind : c.value(QLatin1String("kinds")).toArray()) kinds << kind.toString();
+      const QString password = str("password");
+      find()->qaSubmit(password, c.contains(QLatin1String("repeat")) ? str("repeat") : password, str("decoy"), kinds);
+      until([find] { return !find() || !find()->qaRecoveryKey().isEmpty() || !find()->qaError().isEmpty(); }, 30000, [=, this](bool ok) {
+        HardeningSetup *setup = find();
+        if (!ok || !setup) return fail(id, QStringLiteral("setup did not finish"));
+        QJsonObject out{{QStringLiteral("recoveryKey"), setup->qaRecoveryKey()}, {QStringLiteral("error"), setup->qaError()}, {QStringLiteral("blurred"), setup->qaKeyBlurred()}};
+        if (!setup->qaRecoveryKey().isEmpty()) {
+          // A wrong check first when asked for one, then the right groups unless the dialog is to stay open.
+          QStringList wrong;
+          for (const QJsonValue &group : c.value(QLatin1String("wrongCheck")).toArray()) wrong << group.toString();
+          if (!wrong.isEmpty()) out.insert(QStringLiteral("wrongCheckError"), setup->qaDone(wrong));
+          if (c.value(QLatin1String("finish")).toBool(true)) out.insert(QStringLiteral("checkError"), setup->qaDone());
+        }
+        reply(id, out);
+      });
+    });
+  } else if (op == QLatin1String("processing_state")) {
+    PreloadOverlay *screen = w_->processingScreen();
+    QWidget *host = w_->overlayHost();
+    // What a click on the sidebar and on the gallery would reach.
+    QJsonArray hits;
+    for (const QPoint point : {QPoint(60, 100), QPoint(host->width() * 3 / 4, host->height() - 60)}) {
+      QWidget *hit = host->childAt(point);
+      hits.append(hit && (hit == screen || screen->isAncestorOf(hit)));
+    }
+    int enabled = 0;
+    for (QAction *action : w_->actions()) enabled += action->isEnabled();
+    reply(id, QJsonObject{{QStringLiteral("visible"), screen->isVisible()}, {QStringLiteral("vault"), screen->qaVault()}, {QStringLiteral("blocksClicks"), hits}, {QStringLiteral("enabledActions"), enabled}, {QStringLiteral("frosted"), screen->qaFrosted()}});
+  } else if (op == QLatin1String("processing_workers")) {
+    PreloadOverlay *screen = w_->processingScreen();
+    screen->qaSetWorkers(c.value(QLatin1String("thumbnails")).toInt(), c.value(QLatin1String("metadata")).toInt(), c.value(QLatin1String("encryption")).toInt(4));
+    reply(id, QJsonObject{{QStringLiteral("ms"), ms()}});
+  } else if (op == QLatin1String("setup_page")) {
+    for (auto *setup : w_->overlayHost()->findChildren<HardeningSetup *>())
+      if (setup->isOpen()) {
+        if (str("page") == QLatin1String("reveal")) setup->qaReveal();
+        else setup->qaShowCheck();
+        return reply(id, QJsonObject{{QStringLiteral("ms"), ms()}});
+      }
+    fail(id, QStringLiteral("setup is not open"));
+  } else if (op == QLatin1String("export_confirm")) {
+    for (auto *panel : w_->overlayHost()->findChildren<ConfirmPanel *>())
+      if (panel->isOpen() && panel->objectName() == QLatin1String("exportConfirm")) {
+        for (auto *button : panel->findChildren<TextButton *>())
+          if (button->text() == t("security.export.action")) button->click();
+        return reply(id, QJsonObject{{QStringLiteral("confirmed"), true}});
+      }
+    fail(id, QStringLiteral("no export confirmation"));
   } else if (op == QLatin1String("set_locked")) {
     w_->setLocked(c.value(QLatin1String("locked")).toBool());
     reply(id, QJsonObject{{QStringLiteral("locked"), w_->locked()}});
@@ -582,7 +664,7 @@ void QaDriver::handle(const QJsonObject &c) {
   } else if (op == QLatin1String("item")) {
     const MediaItem *item = w_->model()->item(c.value(QLatin1String("index")).toInt());
     if (!item) return fail(id, QStringLiteral("item missing"));
-    reply(id, QJsonObject{{QStringLiteral("name"), item->name}, {QStringLiteral("favorite"), item->favorite}, {QStringLiteral("video"), item->isVideo}, {QStringLiteral("width"), item->width}, {QStringLiteral("height"), item->height}, {QStringLiteral("dateTaken"), item->dateTaken}, {QStringLiteral("dateAdded"), item->dateAdded}, {QStringLiteral("revision"), item->revision}, {QStringLiteral("album"), item->albumId}});
+    reply(id, QJsonObject{{QStringLiteral("name"), item->name}, {QStringLiteral("label"), item->label()}, {QStringLiteral("favorite"), item->favorite}, {QStringLiteral("video"), item->isVideo}, {QStringLiteral("width"), item->width}, {QStringLiteral("height"), item->height}, {QStringLiteral("dateTaken"), item->dateTaken}, {QStringLiteral("dateAdded"), item->dateAdded}, {QStringLiteral("revision"), item->revision}, {QStringLiteral("album"), item->albumId}});
   } else if (op == QLatin1String("copy_selection")) {
     w_->gallery()->collectSelection([=, this](const QVector<MediaItem> &items) {
       if (qEnvironmentVariableIntValue("ROOM237_QA_PRIVATE_CLIPBOARD") == 1) {

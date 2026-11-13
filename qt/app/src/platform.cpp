@@ -82,6 +82,7 @@ void activateApplication() {}
 void roundSurface(QWindow *, int) {}
 void setDockVisibleProgress(double) {}
 QImage decodeImageNative(const QString &, int, QSize *) { return {}; }
+QImage decodeImageNativeData(const QByteArray &, int, QSize *) { return {}; }
 void lowerThreadPriority() { QThread::currentThread()->setPriority(QThread::LowPriority); }
 void releaseFreeMemory() {
 #if defined(__GLIBC__)

@@ -113,7 +113,7 @@ void DuplicatePreview::paintEvent(QPaintEvent *) {
   if (items_.isEmpty()) return;
   p.setPen(Theme::text);
   p.setFont(Theme::font(14, QFont::Medium));
-  p.drawText(QRect(16, 12, width() - 72, 20), Qt::AlignLeft | Qt::AlignVCenter, fontMetrics().elidedText(items_[index_].name, Qt::ElideMiddle, width() - 72));
+  p.drawText(QRect(16, 12, width() - 72, 20), Qt::AlignLeft | Qt::AlignVCenter, fontMetrics().elidedText(items_[index_].label(), Qt::ElideMiddle, width() - 72));
   p.setPen(Theme::muted);
   p.setFont(Theme::font(12));
   p.drawText(QRect(16, 32, width() - 72, 16), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("%1 / %2").arg(index_ + 1).arg(items_.size()));
@@ -646,7 +646,7 @@ void DuplicatesView::paintTile(QPainter &painter, int g, int index, const MediaI
       const QFont nameFont = Theme::font(11, QFont::Medium), metaFont = Theme::font(10);
       p.setFont(nameFont);
       p.setPen(Theme::text);
-      p.drawText(QRect(0, 0, kTile, 14), Qt::AlignLeft | Qt::AlignVCenter, QFontMetrics(nameFont).elidedText(item.name, Qt::ElideRight, kTile));
+      p.drawText(QRect(0, 0, kTile, 14), Qt::AlignLeft | Qt::AlignVCenter, QFontMetrics(nameFont).elidedText(item.label(), Qt::ElideRight, kTile));
       p.setFont(metaFont);
       p.setPen(Theme::muted);
       p.drawText(QRect(0, 15, kTile, 13), Qt::AlignLeft | Qt::AlignVCenter, QFontMetrics(metaFont).elidedText(parts.join(QStringLiteral(" · ")), Qt::ElideRight, kTile));

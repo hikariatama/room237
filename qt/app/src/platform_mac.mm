@@ -97,10 +97,21 @@ void layoutWindowControls(QWidget *window) {
 void setDockVisibleProgress(double) {}
 void lowerThreadPriority() { pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0); }
 void releaseFreeMemory() { malloc_zone_pressure_relief(nullptr, 0); }
+static QImage decodeFromSource(CGImageSourceRef source, int maxPixelSize, QSize *fullSize);
 QImage decodeImageNative(const QString &path, int maxPixelSize, QSize *fullSize) {
   @autoreleasepool {
     NSURL *url = [NSURL fileURLWithPath:path.toNSString()];
-    CGImageSourceRef source = CGImageSourceCreateWithURL((__bridge CFURLRef)url, nullptr);
+    return decodeFromSource(CGImageSourceCreateWithURL((__bridge CFURLRef)url, nullptr), maxPixelSize, fullSize);
+  }
+}
+QImage decodeImageNativeData(const QByteArray &bytes, int maxPixelSize, QSize *fullSize) {
+  @autoreleasepool {
+    NSData *data = [NSData dataWithBytesNoCopy:const_cast<char *>(bytes.constData()) length:NSUInteger(bytes.size()) freeWhenDone:NO];
+    return decodeFromSource(CGImageSourceCreateWithData((__bridge CFDataRef)data, nullptr), maxPixelSize, fullSize);
+  }
+}
+static QImage decodeFromSource(CGImageSourceRef source, int maxPixelSize, QSize *fullSize) {
+  @autoreleasepool {
     if (!source) return {};
     if (fullSize) {
       NSDictionary *properties = CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(source, 0, nullptr));

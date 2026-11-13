@@ -168,13 +168,25 @@ void PrivacyShield::paintEvent(QPaintEvent *) {
   }
 }
 PreloadOverlay::PreloadOverlay(QWidget *parent) : QWidget(parent) {
-  setAttribute(Qt::WA_TransparentForMouseEvents);  // The gallery stays usable underneath.
+  setAcceptDrops(false);
   hide();
   lottie_ = new LottieView(QStringLiteral("preloading"), 64, this);
+  thumbWorkers_ = new NumberSlider(1, 32, 4, t("preload.threads.thumbnails"), this);
+  metaWorkers_ = new NumberSlider(1, 32, 4, t("preload.threads.metadata"), this);
+  vaultWorkers_ = new NumberSlider(1, 32, 4, t("preload.threads.encryption"), this);
+  for (NumberSlider *slider : {thumbWorkers_, metaWorkers_, vaultWorkers_})
+    connect(slider, &NumberSlider::valueChanged, this, [this] { emit workersChanged(thumbWorkers_->value(), metaWorkers_->value(), vaultWorkers_->value()); });
+  // The room shows through blurred, and keeps changing underneath while the work goes on.
+  frostTimer_.setInterval(1000);
+  connect(&frostTimer_, &QTimer::timeout, this, [this] {
+    refreshFrost();
+    update();
+  });
   showDelay_.setSingleShot(true);
   showDelay_.setInterval(500);
   connect(&showDelay_, &QTimer::timeout, this, [this] {
     setGeometry(parentWidget()->rect());
+    refreshFrost();
     show();
     raise();
     fade_.stop();
@@ -190,7 +202,6 @@ PreloadOverlay::PreloadOverlay(QWidget *parent) : QWidget(parent) {
     opacity_ = v.toReal();
     update();
   });
-  // The gallery stays live underneath: it scrolls and fills in while indexing runs.
   connect(&fade_, &QVariantAnimation::finished, this, [this] {
     if (opacity_ <= 0) hide();
   });
@@ -200,17 +211,21 @@ PreloadOverlay::PreloadOverlay(QWidget *parent) : QWidget(parent) {
   spin_.setLoopCount(-1);
   connect(&spin_, &QVariantAnimation::valueChanged, this, [this] { if (isVisible()) update(QRect(width() / 2 - 250, height() / 2 - 40, 40, 200)); });
 }
-void PreloadOverlay::setStages(int thumbsDone, int thumbsTotal, int metaDone, int metaTotal) {
-  thumbsDone_ = thumbsDone;
-  thumbsTotal_ = thumbsTotal;
-  metaDone_ = metaDone;
-  metaTotal_ = metaTotal;
-  idle_.start();
+void PreloadOverlay::appear() {
   if (!isVisible() && !showDelay_.isActive()) showDelay_.start();
+  else if (isVisible() && fade_.endValue().toReal() < 1) {
+    // Work came back while the screen was fading out.
+    fade_.stop();
+    fade_.setStartValue(opacity_);
+    fade_.setEndValue(1.0);
+    fade_.start();
+  }
+  place();
   if (isVisible()) update();
   if (spin_.state() != QAbstractAnimation::Running && !Theme::reduceMotion()) spin_.start();
 }
-void PreloadOverlay::finish() {
+void PreloadOverlay::disappear() {
+  if (preloading_ || vault_) return;
   showDelay_.stop();
   idle_.stop();
   spin_.stop();
@@ -219,6 +234,86 @@ void PreloadOverlay::finish() {
   fade_.setStartValue(opacity_);
   fade_.setEndValue(0.0);
   fade_.start();
+}
+void PreloadOverlay::setStages(int thumbsDone, int thumbsTotal, int metaDone, int metaTotal) {
+  thumbsDone_ = thumbsDone;
+  thumbsTotal_ = thumbsTotal;
+  metaDone_ = metaDone;
+  metaTotal_ = metaTotal;
+  preloading_ = true;
+  idle_.start();
+  appear();
+}
+void PreloadOverlay::finish() {
+  preloading_ = false;
+  idle_.stop();
+  disappear();
+  place();
+}
+void PreloadOverlay::setVault(const QString &title, int done, int total) {
+  vault_ = true;
+  vaultTitle_ = title;
+  vaultDone_ = done;
+  vaultTotal_ = total;
+  appear();
+}
+void PreloadOverlay::finishVault() {
+  vault_ = false;
+  disappear();
+  place();
+}
+void PreloadOverlay::setWorkers(int thumbnails, int metadata, int encryption) {
+  thumbWorkers_->setValue(thumbnails);
+  metaWorkers_->setValue(metadata);
+  vaultWorkers_->setValue(encryption);
+}
+// Everything under this screen, rendered without it, then blurred.
+void PreloadOverlay::refreshFrost() {
+  QWidget *host = parentWidget();
+  const qreal ratio = devicePixelRatioF();
+  QImage image(host->size() * ratio, QImage::Format_RGB32);
+  image.setDevicePixelRatio(ratio);
+  image.fill(QColor(23, 23, 23));
+  {
+    QPainter painter(&image);
+    for (QObject *object : host->children()) {
+      auto *widget = qobject_cast<QWidget *>(object);
+      if (!widget || widget == this || !widget->isVisible() || widget->isWindow()) continue;
+      // Only what lies below in the stacking order.
+      if (host->children().indexOf(widget) > host->children().indexOf(this)) continue;
+      widget->render(&painter, widget->pos(), QRegion(), QWidget::DrawWindowBackground | QWidget::DrawChildren);
+    }
+  }
+  frost_ = Theme::frosted(image, host->size(), ratio, 16);
+}
+void PreloadOverlay::retranslate() {
+  thumbWorkers_->setAccessibleName(t("preload.threads.thumbnails"));
+  metaWorkers_->setAccessibleName(t("preload.threads.metadata"));
+  vaultWorkers_->setAccessibleName(t("preload.threads.encryption"));
+  update();
+}
+void PreloadOverlay::place() {
+  const int left = width() / 2 - 250, top = height() / 2 - 120;
+  lottie_->move(left, top);
+  // Indexing shows its two worker counts under its two steps; encryption its one under its one step.
+  const int x = left + 40 + 460 - thumbWorkers_->sizeHint().width(), w = thumbWorkers_->sizeHint().width();
+  thumbWorkers_->setGeometry(x, top + 88 + 128 + 24, w, 36);
+  metaWorkers_->setGeometry(x, top + 88 + 128 + 24 + 44, w, 36);
+  vaultWorkers_->setGeometry(x, top + 88 + 64 + 24, w, 36);
+  thumbWorkers_->setVisible(!vault_);
+  metaWorkers_->setVisible(!vault_);
+  vaultWorkers_->setVisible(vault_);
+}
+void PreloadOverlay::resizeEvent(QResizeEvent *) { place(); }
+void PreloadOverlay::showEvent(QShowEvent *) {
+  place();
+  frostTimer_.start();
+  emit blockingChanged(true);
+}
+void PreloadOverlay::hideEvent(QHideEvent *) {
+  frostTimer_.stop();
+  frost_ = {};
+  emit blockingChanged(false);
 }
 void PreloadOverlay::paintStep(QPainter &p, int y, const QString &name, int done, int total, bool last) {
   const int left = width() / 2 - 250;
@@ -257,14 +352,14 @@ void PreloadOverlay::paintStep(QPainter &p, int y, const QString &name, int done
 void PreloadOverlay::paintEvent(QPaintEvent *) {
   QPainter p(this);
   p.setOpacity(opacity_);
+  if (!frost_.isNull()) p.drawPixmap(0, 0, frost_);
   p.fillRect(rect(), QColor(23, 23, 23, 204));
   const int left = width() / 2 - 250, top = height() / 2 - 120;
-  lottie_->move(left, top);
   p.setRenderHint(QPainter::Antialiasing);
   p.setFont(Theme::font(20, QFont::DemiBold));
   p.setPen(Theme::text);
-  p.drawText(QRect(left + 80, top + 2, 420, 26), Qt::AlignVCenter | Qt::AlignLeft, t("preload.title"));
-  const int done = thumbsDone_ + metaDone_, total = thumbsTotal_ + metaTotal_;
+  p.drawText(QRect(left + 80, top + 2, 420, 26), Qt::AlignVCenter | Qt::AlignLeft, vault_ ? vaultTitle_ : t("preload.title"));
+  const int done = vault_ ? vaultDone_ : thumbsDone_ + metaDone_, total = vault_ ? vaultTotal_ : thumbsTotal_ + metaTotal_;
   constexpr qreal unit = 24.0 / 36, radius = 15.9155 * unit;
   const QRectF ring(left + 80 + 12 - radius, top + 32 + 12 - radius, 2 * radius, 2 * radius);
   p.setBrush(Qt::NoBrush);
@@ -275,8 +370,21 @@ void PreloadOverlay::paintEvent(QPaintEvent *) {
   p.setFont(Theme::font(14, QFont::Medium));
   p.setPen(Theme::muted);
   p.drawText(QRect(left + 80 + 32, top + 32, 380, 24), Qt::AlignVCenter | Qt::AlignLeft, QStringLiteral("%1 / %2").arg(done).arg(total));
+  if (vault_) {
+    paintStep(p, top + 88, t("vault.overlay.files"), vaultDone_, vaultTotal_, true);
+    p.setFont(Theme::font(14));
+    p.setPen(Theme::text);
+    p.drawText(QRect(left + 40, top + 88 + 64 + 24, 300, 36), Qt::AlignVCenter | Qt::AlignLeft, t("preload.threads.encryption"));
+    return;
+  }
   paintStep(p, top + 88, t("preload.thumbnails"), thumbsDone_, thumbsTotal_, false);
   paintStep(p, top + 88 + 64, t("preload.metadata"), metaDone_, metaTotal_, true);
+  // Labels of the worker counts, level with their sliders.
+  p.setFont(Theme::font(14));
+  p.setPen(Theme::text);
+  const int textLeft = left + 40;
+  p.drawText(QRect(textLeft, top + 88 + 128 + 24, 300, 36), Qt::AlignVCenter | Qt::AlignLeft, t("preload.threads.thumbnails"));
+  p.drawText(QRect(textLeft, top + 88 + 128 + 24 + 44, 300, 36), Qt::AlignVCenter | Qt::AlignLeft, t("preload.threads.metadata"));
 }
 LoggerPanel::LoggerPanel(QWidget *parent) : QWidget(parent) {
   setFixedSize(512, 128);

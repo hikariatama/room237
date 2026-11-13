@@ -14,7 +14,9 @@
 #include <QPainterPath>
 #include "panels.h"
 #include <QHBoxLayout>
+#include <QBuffer>
 #include <QImageReader>
+#include "secure_media.h"
 #include <QKeyEvent>
 #include <QLocale>
 #include <QMediaDevices>
@@ -97,6 +99,7 @@ private:
 };
 // One reader at a time decodes the next frame on the pool; the timer shows it on schedule.
 struct Viewer::Animation {
+  std::shared_ptr<QBuffer> plain;  // The decrypted file of an encrypted root, read by `reader`.
   std::shared_ptr<QImageReader> reader;
   QImage ready, shown;
   int readyDelay = 100, generation = 0;
@@ -519,7 +522,7 @@ void Viewer::showItem(const MediaItem &item, const QRect &origin, const QImage &
   const int generation = ++generation_;
   Q_UNUSED(generation);
   setFavorite(item.favorite);
-  titleLabel_->setText(QFontMetrics(titleLabel_->font()).elidedText(item.name, Qt::ElideMiddle, qMax(120, width() - 340)));
+  titleLabel_->setText(QFontMetrics(titleLabel_->font()).elidedText(item.label(), Qt::ElideMiddle, qMax(120, width() - 340)));
   const QLocale locale(I18n::language() == QLatin1String("ru") ? QLocale::Russian : QLocale::English);
   // Position in the system number format, then a medium date and a short time.
   QStringList parts;
@@ -571,7 +574,7 @@ void Viewer::showItem(const MediaItem &item, const QRect &origin, const QImage &
 void Viewer::startDecode() {
   const QString path = item_.path();
   const int generation = generation_.load();
-  const QString ext = QFileInfo(path).suffix().toLower();
+  const QString ext = item_.extension();
   if (ext == QLatin1String("gif") || ext == QLatin1String("webp") || ext == QLatin1String("apng")) {
     startAnimation();
     if (animation_) return;
@@ -602,8 +605,7 @@ void Viewer::keepDecoded(const QString &path, const QImage &fit) {
 }
 void Viewer::prefetch(const MediaItem &item) {
   if (item.isVideo || prefetched_.contains(item.path()) || suspended_) return;
-  const QString ext = QFileInfo(item.path()).suffix().toLower();
-  if (ext == QLatin1String("gif")) return;
+  if (item.extension() == QLatin1String("gif")) return;
   const QString path = item.path();
   const QSize box = decodeBox();
   const int generation = generation_.load();
@@ -617,10 +619,20 @@ void Viewer::prefetch(const MediaItem &item) {
   }, -1);
 }
 void Viewer::startAnimation() {
-  auto reader = std::make_shared<QImageReader>(item_.path());
+  std::shared_ptr<QBuffer> plain;
+  std::shared_ptr<QImageReader> reader;
+  if (SecureMedia::isSealed(item_.path())) {
+    plain = std::make_shared<QBuffer>();
+    plain->setData(SecureMedia::read(item_.path()));
+    plain->open(QIODevice::ReadOnly);
+    reader = std::make_shared<QImageReader>(plain.get());
+  } else {
+    reader = std::make_shared<QImageReader>(item_.path());
+  }
   reader->setAutoTransform(true);
   if (!reader->supportsAnimation() || reader->imageCount() == 1) return;
   animation_ = std::make_unique<Animation>();
+  animation_->plain = plain;
   animation_->reader = reader;
   animation_->box = decodeBox();
   animation_->generation = generation_.load();
@@ -631,17 +643,23 @@ void Viewer::requestAnimationFrame() {
   if (!animation_ || animation_->pending) return;
   animation_->pending = true;
   auto reader = animation_->reader;
+  auto plain = animation_->plain;
   const QSize box = animation_->box;
   const int generation = animation_->generation;
-  decoders_.start([this, reader, box, generation] {
+  decoders_.start([this, reader, plain, box, generation] {
     if (generation != generation_.load()) return;
     QImage frame = reader->read();
     if (frame.isNull()) {
       // The last frame was reached or the file ended early: rewind for the next loop.
       reader->jumpToImage(0);
       if (reader->error() != QImageReader::UnknownError || !reader->canRead()) {
-        const QString file = reader->fileName();
-        reader->setFileName(file);
+        if (plain) {
+          plain->seek(0);
+          reader->setDevice(plain.get());
+        } else {
+          const QString file = reader->fileName();
+          reader->setFileName(file);
+        }
       }
       frame = reader->read();
     }
@@ -794,7 +812,19 @@ void Viewer::startVideo() {
   applyVideoGeometry();
   video_->show();
   video_->setFocusProxy(this);
-  player_->setSource(QUrl::fromLocalFile(item_.path()));
+  if (SecureMedia::isSealed(item_.path())) {
+    // The player reads the decrypted stream; the original name tells it the container.
+    std::unique_ptr<QIODevice> device = SecureMedia::open(item_.path());
+    if (!device) {
+      showFailure();
+      return;
+    }
+    // The previous stream is released only after the player has let go of it.
+    player_->setSourceDevice(device.get(), QUrl::fromLocalFile(QStringLiteral("/") + item_.label()));
+    sealedVideo_ = std::move(device);
+  } else {
+    player_->setSource(QUrl::fromLocalFile(item_.path()));
+  }
   if (!suspended_) player_->play();
   else resumeVideo_ = true;
 }
@@ -824,6 +854,7 @@ void Viewer::releasePlayer() {
   if (!player_) return;
   player_->stop();
   player_->setSource({});
+  sealedVideo_.reset();
   // The decoder and video pipeline hold hundreds of MiB; keep them only while a video is open.
   if (envFlag("ROOM237_RELEASE_VIDEO", true)) {
     delete video_;

@@ -21,6 +21,7 @@ void setDockVisibleProgress(double fraction);
 QString defaultProfileDirectory();
 QString legacyProfileDirectory();
 QImage decodeImageNative(const QString &path, int maxPixelSize = 0, QSize *fullSize = nullptr);  // HEIC, AVIF: ImageIO on macOS, null elsewhere.
+QImage decodeImageNativeData(const QByteArray &bytes, int maxPixelSize = 0, QSize *fullSize = nullptr);
 QString platformKey();  // darwin-aarch64, windows-x86_64, linux-x86_64-appimage ...
 // Path of what an update replaces, the probe inside it and how to start it again.
 struct InstallInfo {

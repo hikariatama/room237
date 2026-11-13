@@ -2,6 +2,8 @@
 // Full-window screens: choose folder, confirm open, lock, debugger, indexing, startup.
 #include "widgets.h"
 #include <QLabel>
+#include <QMouseEvent>
+#include <QWheelEvent>
 #include <QMovie>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -66,22 +68,56 @@ protected:
 private:
   QPixmap frost_;
 };
-// Over the gallery without capturing the pointer: animation, title, step list with bars.
+// Over the whole window while a library is being indexed or encrypted: animation, title, steps with bars. It takes
+// every click, scroll and drop, and goes away only when the work is done. Indexing shows the worker counts, which
+// change the speed at once.
 class PreloadOverlay : public QWidget {
   Q_OBJECT
 public:
   explicit PreloadOverlay(QWidget *parent);
   void setStages(int thumbsDone, int thumbsTotal, int metaDone, int metaTotal);
   void finish();
+  // Encryption or its removal: one step of files.
+  void setVault(const QString &title, int done, int total);
+  void finishVault();
+  void setWorkers(int thumbnails, int metadata, int encryption);
+  void retranslate();
+#ifdef ROOM237_QA
+  bool qaVault() const { return vault_; }
+  void qaSetWorkers(int thumbnails, int metadata, int encryption) {
+    thumbWorkers_->setValue(thumbnails, true);
+    metaWorkers_->setValue(metadata, true);
+    vaultWorkers_->setValue(encryption, true);
+  }
+  bool qaFrosted() const { return !frost_.isNull(); }
+#endif
+signals:
+  void workersChanged(int thumbnails, int metadata, int encryption);
+  void blockingChanged(bool blocking);
 protected:
   void paintEvent(QPaintEvent *) override;
+  void resizeEvent(QResizeEvent *) override;
+  void showEvent(QShowEvent *) override;
+  void hideEvent(QHideEvent *) override;
+  void mousePressEvent(QMouseEvent *event) override { event->accept(); }
+  void mouseReleaseEvent(QMouseEvent *event) override { event->accept(); }
+  void mouseDoubleClickEvent(QMouseEvent *event) override { event->accept(); }
+  void wheelEvent(QWheelEvent *event) override { event->accept(); }
 private:
+  void appear();
+  void refreshFrost();
+  void disappear();
+  void place();
   void paintStep(QPainter &p, int y, const QString &name, int done, int total, bool last);
-  int thumbsDone_ = 0, thumbsTotal_ = 0, metaDone_ = 0, metaTotal_ = 0;
-  QTimer showDelay_, idle_;
+  int thumbsDone_ = 0, thumbsTotal_ = 0, metaDone_ = 0, metaTotal_ = 0, vaultDone_ = 0, vaultTotal_ = 0;
+  bool preloading_ = false, vault_ = false;
+  QString vaultTitle_;
+  QTimer showDelay_, idle_, frostTimer_;
+  QPixmap frost_;
   QVariantAnimation fade_, spin_;
   qreal opacity_ = 0;
   LottieView *lottie_;
+  NumberSlider *thumbWorkers_, *metaWorkers_, *vaultWorkers_;
 };
 // The latest log lines in a small corner panel.
 class LoggerPanel : public QWidget {

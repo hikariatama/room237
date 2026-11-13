@@ -64,7 +64,7 @@ def main():
     parser.add_argument('--banner', type=Path, help='multi-resolution DMG background TIFF from macos/make_banner.py')
     parser.add_argument('--key', type=Path, required=True, help='local QA feed key; never embedded or shipped')
     parser.add_argument('--pubkey', type=Path, required=True, help='public half of --key')
-    parser.add_argument('--trust-pubkey', type=Path, help='minisign public key the app trusts; default: the production key in qt/core/src/update.rs')
+    parser.add_argument('--trust-pubkey', type=Path, help='minisign public key the app trusts; default: the production key in qt/core/src/update.cpp')
     parser.add_argument('--feed-url', default='http://127.0.0.1:8765', help='loopback feed URL; no server is started')
     parser.add_argument('--linux-qt', type=Path, help='Qt for Linux gcc_64 directory (the one with bin/ lib/ plugins/)')
     parser.add_argument('--deps', type=Path, help='Linux extras: ffmpeg-linux-x86_64, appimagetool, runtime-x86_64')
@@ -76,7 +76,6 @@ def main():
     parser.add_argument('--deps-record', type=Path, action='append', default=[], help='deps-installed.json from ci/fetch_deps.py, copied into toolchain.json')
     parser.add_argument('--min-free-gib', type=float, default=float(os.environ.get('ROOM237_MIN_FREE_GIB', 15)), help='stop when free disk space falls below this (default 15)')
     parser.add_argument('--jobs', type=int, default=int(os.environ.get('ROOM237_BUILD_JOBS', 6)))
-    parser.add_argument('--reuse-core', type=Path, help='core_reuse.py manifest: ship the accepted room237-core binaries instead of compiling; refuses on any source/version/key/SHA difference')
     parser.add_argument('--qa', action='store_true', help='also build test variants with the QA driver under n/qa and n1/qa (macOS, Linux); they are never shipped')
     parser.add_argument('--share-identical-with', type=Path, help='accepted release work: byte-identical outputs at the same path share blocks with it (APFS clone)')
     args = parser.parse_args()
@@ -106,9 +105,9 @@ def main():
     if cache_root.is_relative_to(source):
         parser.error('cache must be outside source')
     jobs = str(args.jobs)
-    env = dict(os.environ, CMAKE_BUILD_PARALLEL_LEVEL=jobs, CARGO_BUILD_JOBS=jobs, ROOM237_BUILD_JOBS=jobs, PYTHONDONTWRITEBYTECODE='1')
+    env = dict(os.environ, CMAKE_BUILD_PARALLEL_LEVEL=jobs, ROOM237_BUILD_JOBS=jobs, PYTHONDONTWRITEBYTECODE='1')
     # The shipped app trusts the production updater key; --key/--pubkey only sign the loopback QA feed.
-    production = re.search(r'None => "(RW[A-Za-z0-9+/=]+)"', (source / 'qt/core/src/update.rs').read_text()).group(1)
+    production = re.search(r'kPublicKey = "(RW[A-Za-z0-9+/=]+)"', (source / 'qt/core/src/update.cpp').read_text()).group(1)
     trust = args.trust_pubkey.read_text().strip().splitlines()[-1] if args.trust_pubkey else production
     env['ROOM237_UPDATE_PUBKEY'] = trust
     reserve = int(args.min_free_gib * 1024**3)
@@ -146,8 +145,7 @@ def main():
     n1 = args.n1_version or '.'.join(parts[:-1] + [str(int(parts[-1]) + 1)])
     if n1 == version:
         raise RuntimeError('N+1 version must differ')
-    reuse = {'manifest': str(args.reuse_core.resolve(strict=True)), 'manifestSha256': digest(args.reuse_core)} if args.reuse_core else None
-    (work / 'RELEASE.json').write_text(json.dumps({'mode': args.mode, 'platform': args.platform, 'arch': arches if args.platform == 'macos' else ['x86_64'], 'reuseCore': reuse, 'shareIdenticalWith': str(args.share_identical_with) if args.share_identical_with else None, 'source_sha256': source_hash, 'version': version, 'n1_version': n1, 'host': platform.platform(), 'signature': 'macOS ad-hoc only; no Developer ID/notarization; Windows unsigned', 'updateTrust': {'embeddedPublicKey': trust, 'source': 'qt/core/src/update.rs production default' if not args.trust_pubkey else str(args.trust_pubkey), 'localFeed': 'qt-update.json in n/n1 is signed with the local QA key (qa-feed-public-key.txt); the shipped app rejects it outside fenced QA fixtures. The release feed is written by assemble_release.py and signed with the production key.'}}, indent=2) + '\n')
+    (work / 'RELEASE.json').write_text(json.dumps({'mode': args.mode, 'platform': args.platform, 'arch': arches if args.platform == 'macos' else ['x86_64'], 'shareIdenticalWith': str(args.share_identical_with) if args.share_identical_with else None, 'source_sha256': source_hash, 'version': version, 'n1_version': n1, 'host': platform.platform(), 'signature': 'macOS ad-hoc only; no Developer ID/notarization; Windows unsigned', 'updateTrust': {'embeddedPublicKey': trust, 'source': 'qt/core/src/update.cpp production default' if not args.trust_pubkey else str(args.trust_pubkey), 'localFeed': 'qt-update.json in n/n1 is signed with the local QA key (qa-feed-public-key.txt); the shipped app rejects it outside fenced QA fixtures. The release feed is written by assemble_release.py and signed with the production key.'}}, indent=2) + '\n')
     repro = ' '.join(shlex.quote(x) for x in sys.argv[1:])
     (work / 'REPRODUCE.txt').write_text('Use a NEW --work directory. Dependencies are inventoried in toolchain.json.\n' + 'qt/packaging/release_all.sh ' + repro.replace(str(args.key), '<LOCAL_QA_KEY>') + '\n')
     sys.path.insert(0, str(snap / 'qt/packaging'))
@@ -166,7 +164,7 @@ def main():
         toolchain['files'].update({str(p.resolve()): digest(p) for p in args.deps.iterdir() if p.is_file()})
     for record in args.deps_record:
         toolchain['pinnedInputs'].update(json.loads(record.read_text()))
-    for exe in ['cargo', 'rustc', 'cmake', 'ninja', 'python3', 'makensis']:
+    for exe in ['cmake', 'ninja', 'python3', 'makensis']:
         if shutil.which(exe):
             result = subprocess.run([exe, '-VERSION' if exe == 'makensis' else '--version'], capture_output=True, text=True)
             toolchain[exe] = (result.stdout + result.stderr).strip()
@@ -184,26 +182,14 @@ def main():
     n1data, n1hash = inventory(n1snap)
     (work / 'source-n1-inventory.json').write_bytes(n1data)
     (work / 'SOURCE_N1_SHA256').write_text(n1hash + '\n')
-    import core_reuse
-    inventories = {'n': json.loads(data), 'n1': json.loads(n1data)}
-
-    def reused(label, ver, platform_key):
-        path, sha = core_reuse.validate(args.reuse_core, inventories[label], label, ver, trust, platform_key)
-        dest = work / 'core-inputs' / label / platform_key / path.name
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, dest)
-        if digest(dest) != sha:
-            raise RuntimeError('reuse-core: copied input differs')
-        with (work / 'core-inputs.jsonl').open('a') as log:
-            log.write(json.dumps({'label': label, 'platform': platform_key, 'file': str(dest), 'sha256': sha, 'from': str(path)}) + '\n')
-        return {'ROOM237_CORE_BINARY': str(dest), 'ROOM237_CORE_SHA256': sha}
+    import share_blocks
 
     def share(label, target):
         if args.share_identical_with:
             ref = args.share_identical_with.resolve(strict=True) / label / target
             disk()
-            saved = core_reuse.share_identical(work / label / target, ref, work / 'shared-with-accepted.jsonl')
-            records.append({'name': f'{label}-share-{target}', 'command': ['core_reuse.share_identical', str(work / label / target), str(ref)], 'exit_code': 0, 'shared_bytes': saved})
+            saved = share_blocks.share_identical(work / label / target, ref, work / 'shared-with-accepted.jsonl')
+            records.append({'name': f'{label}-share-{target}', 'command': ['share_blocks.share_identical', str(work / label / target), str(ref)], 'exit_code': 0, 'shared_bytes': saved})
             (work / 'commands.json').write_text(json.dumps(records, indent=2) + '\n')
             disk()
 
@@ -213,11 +199,11 @@ def main():
         out = work / label
         out.mkdir()
         sbom = out / 'sbom-core.json'
-        run(f'{label}-sbom', [sys.executable, src / 'qt/packaging/make_sbom.py', src / 'qt/core/Cargo.lock', sbom, 'Qt=6.11.3=LGPL-3.0-only', 'FFmpeg-Qt=7.1=LGPL-2.1-or-later'])
+        run(f'{label}-sbom', [sys.executable, src / 'qt/packaging/make_sbom.py', src / 'qt/packaging/ci/deps.lock.json', sbom, 'Qt=6.11.3=LGPL-3.0-only', 'FFmpeg-Qt=7.1=LGPL-2.1-or-later'])
         (out / 'trust-public-key.txt').write_text(trust + '\n')
         shutil.copy2(args.pubkey, out / 'qa-feed-public-key.txt')
         shutil.copy2(src / 'qt/packaging/THIRD_PARTY_NOTICES.md', out / 'THIRD_PARTY_NOTICES.md')
-        base = {'ROOM237_SBOM': str(sbom), 'RUSTFLAGS': f'--remap-path-prefix={work}=/room237-source --remap-path-prefix={home}=/builder'}
+        base = {'ROOM237_SBOM': str(sbom)}
         target = args.platform
         dest = out / target
         dest.mkdir()
@@ -230,9 +216,7 @@ def main():
                 if not ffmpeg:
                     raise RuntimeError(f'missing FFmpeg for macOS {arch}')
                 flags = f'-ffile-prefix-map={work}=/room237-source -ffile-prefix-map={env["QT_ROOT"]}=/qt-sdk'
-                extra = base | {'CORE_TARGET_DIR': str(cache_root / f'core-macos-{arch}'), 'FFMPEG_BIN': str(ffmpeg), 'CXXFLAGS': flags}
-                if args.reuse_core:
-                    extra |= reused(label, ver, f'macos-{arch}')
+                extra = base | {'FFMPEG_BIN': str(ffmpeg), 'CXXFLAGS': flags, 'CFLAGS': flags, 'OBJCXXFLAGS': flags}
                 run(f'{label}-macos-{arch}', ['zsh', src / 'qt/packaging/macos/build.sh', arch, dest], extra)
                 run(f'{label}-dmg-{arch}', [sys.executable, src / 'qt/packaging/macos/make_dmg.py', dest / arch / 'Room237.app', args.banner, dest / f'Room237-{ver}-macos-{arch}.dmg', 'Room237'])
                 run(f'{label}-verify-macos-{arch}', [sys.executable, src / 'qt/packaging/verify_packages.py', '--platform', 'macos', '--root', dest / arch / 'Room237.app', '--dmg', dest / f'Room237-{ver}-macos-{arch}.dmg', '--report', out / f'verify-macos-{arch}.json', *forbid, '--forbid', env['QT_ROOT'], *(['--fixtures', args.fixtures.resolve()] if args.fixtures else [])])
@@ -242,9 +226,7 @@ def main():
                     run(f'{label}-macos-{arch}-qa', ['zsh', src / 'qt/packaging/macos/build.sh', arch, out / 'qa' / target], extra | {'ROOM237_QA': '1'})
         elif target == 'windows':
             flags = f'-ffile-prefix-map={work}=/room237-source -ffile-prefix-map={env["QT_WIN"]}=/qt-sdk -ffile-prefix-map={env["LLVM_MINGW"]}=/compiler-sdk'
-            wextra = base | {'CORE_TARGET_DIR': str(cache_root / 'core-windows'), 'CXXFLAGS': flags}
-            if args.reuse_core:
-                wextra |= reused(label, ver, 'windows-x86_64')
+            wextra = base | {'CXXFLAGS': flags, 'CFLAGS': flags}
             run(f'{label}-windows', ['zsh', src / 'qt/packaging/windows/build.sh', dest], wextra)
             objdump = Path(env['LLVM_MINGW']) / 'bin/llvm-objdump'
             wforbid = [*forbid, '--forbid', env['QT_WIN'], '--forbid', env['LLVM_MINGW']]
@@ -256,9 +238,8 @@ def main():
             cache = cache_root / 'linux'
             cache.mkdir(parents=True, exist_ok=True)
             lextra = base | {'ROOM237_SOURCE': str(src), 'ROOM237_BUILD_CACHE': str(cache), 'ROOM237_QT_LINUX': str(args.linux_qt.resolve()), 'ROOM237_DEPS': str(args.deps.resolve()),
-                             'CXXFLAGS': f'-ffile-prefix-map={work}=/room237-source -ffile-prefix-map={args.linux_qt.resolve()}=/qt-sdk -ffile-prefix-map={home}=/builder'}
-            if args.reuse_core:
-                lextra |= reused(label, ver, 'linux-x86_64')
+                             'CXXFLAGS': f'-ffile-prefix-map={work}=/room237-source -ffile-prefix-map={args.linux_qt.resolve()}=/qt-sdk -ffile-prefix-map={home}=/builder',
+                             'CFLAGS': f'-ffile-prefix-map={work}=/room237-source -ffile-prefix-map={home}=/builder'}
             run(f'{label}-linux', ['bash', src / 'qt/packaging/linux/build.sh', dest], lextra)
             run(f'{label}-verify-linux', [sys.executable, src / 'qt/packaging/verify_packages.py', '--platform', 'linux', '--root', dest / 'stage/room237', '--appimage', dest / f'Room237-{ver}-linux-x86_64.AppImage', '--report', out / 'verify-linux.json', *forbid, '--forbid', args.linux_qt.resolve(), '--forbid', cache, *(['--fixtures', args.fixtures.resolve()] if args.fixtures else [])])
             entries.append(('linux-x86_64', 'tar.gz', dest / f'Room237-{ver}-linux-x86_64.update.tar.gz'))

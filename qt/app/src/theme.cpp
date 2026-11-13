@@ -19,6 +19,12 @@ static const QHash<QByteArray, QByteArray> &iconSources() {
     const auto custom = [&out](const char *name, const char *body) {
       out.insert(name, QByteArray("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"@C\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\">") + body + "</svg>");
     };
+    // From @tabler/icons (MIT), like the generated set.
+    custom("eye", "<path d=\"M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0\"/><path d=\"M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6\"/>");
+    custom("eye-off", "<path d=\"M10.585 10.587a2 2 0 0 0 2.829 2.828\"/><path d=\"M16.681 16.673a8.717 8.717 0 0 1 -4.681 1.327c-3.6 0 -6.6 -2 -9 -6c1.272 -2.12 2.712 -3.678 4.32 -4.674m2.86 -1.146a9.055 9.055 0 0 1 1.82 -.18c3.6 0 6.6 2 9 6c-.666 1.11 -1.379 2.067 -2.138 2.87\"/><path d=\"M3 3l18 18\"/>");
+    custom("key", "<path d=\"M16.555 3.843l3.602 3.602a2.877 2.877 0 0 1 0 4.069l-2.643 2.643a2.877 2.877 0 0 1 -4.069 0l-.301 -.301l-6.558 6.558a2 2 0 0 1 -1.239 .578l-.175 .008h-1.172a1 1 0 0 1 -.993 -.883l-.007 -.117v-1.172a2 2 0 0 1 .467 -1.284l.119 -.13l.414 -.414h2v-2h2v-2l2.144 -2.144l-.301 -.301a2.877 2.877 0 0 1 0 -4.069l2.643 -2.643a2.877 2.877 0 0 1 4.069 0z\"/><path d=\"M15 9h.01\"/>");
+    custom("fingerprint", "<path d=\"M18.9 7a8 8 0 0 1 1.1 5v1a6 6 0 0 0 .8 3\"/><path d=\"M8 11a4 4 0 0 1 8 0v1a10 10 0 0 0 2 6\"/><path d=\"M12 11v2a14 14 0 0 0 2.5 8\"/><path d=\"M8 15a18 18 0 0 0 1.8 6\"/><path d=\"M4.9 19a22 22 0 0 1 -.9 -7v-1a8 8 0 0 1 12 -6.95\"/>");
+    custom("lock-open", "<path d=\"M5 13a2 2 0 0 1 2 -2h10a2 2 0 0 1 2 2v6a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2z\"/><path d=\"M11 16a1 1 0 1 0 2 0a1 1 0 0 0 -2 0\"/><path d=\"M8 11v-5a4 4 0 0 1 8 0\"/>");
     custom("layout-default", "<rect x=\"3.5\" y=\"3.5\" width=\"7\" height=\"7\" rx=\"2\"/><rect x=\"13.5\" y=\"3.5\" width=\"7\" height=\"7\" rx=\"2\"/><rect x=\"3.5\" y=\"13.5\" width=\"7\" height=\"7\" rx=\"2\"/><rect x=\"13.5\" y=\"13.5\" width=\"7\" height=\"7\" rx=\"2\"/>");
     custom("layout-masonry", "<rect x=\"3.5\" y=\"3.5\" width=\"7\" height=\"10\" rx=\"2\"/><rect x=\"3.5\" y=\"16.5\" width=\"7\" height=\"4\" rx=\"1.5\"/><rect x=\"13.5\" y=\"3.5\" width=\"7\" height=\"4\" rx=\"1.5\"/><rect x=\"13.5\" y=\"10.5\" width=\"7\" height=\"10\" rx=\"2\"/>");
     custom("layout-apple", "<g stroke-opacity=\".45\"><rect x=\"3.5\" y=\"3.5\" width=\"7\" height=\"7\" rx=\"1.5\"/><rect x=\"13.5\" y=\"3.5\" width=\"7\" height=\"7\" rx=\"1.5\"/><rect x=\"3.5\" y=\"13.5\" width=\"7\" height=\"7\" rx=\"1.5\"/><rect x=\"13.5\" y=\"13.5\" width=\"7\" height=\"7\" rx=\"1.5\"/></g><rect x=\"4.75\" y=\"5.5\" width=\"4.5\" height=\"3\" rx=\".75\" fill=\"@C\" stroke=\"none\"/><rect x=\"15.5\" y=\"4.75\" width=\"3\" height=\"4.5\" rx=\".75\" fill=\"@C\" stroke=\"none\"/><rect x=\"5.75\" y=\"15.25\" width=\"3\" height=\"3\" rx=\".75\" fill=\"@C\" stroke=\"none\"/><rect x=\"14.75\" y=\"15.5\" width=\"4.5\" height=\"3\" rx=\".75\" fill=\"@C\" stroke=\"none\"/>");
@@ -148,8 +154,10 @@ static void boxPass(QImage &image, int radius, bool vertical) {
   }
 }
 QPixmap frostedCopy(QWidget *source, const QRect &rect, int radius) {
-  const qreal ratio = source->devicePixelRatioF();
-  QImage image = source->grab(rect).toImage();
+  return frosted(source->grab(rect).toImage(), rect.size(), source->devicePixelRatioF(), radius);
+}
+QPixmap frosted(QImage image, const QSize &size, qreal ratio, int radius) {
+  const QRect rect(QPoint(0, 0), size);
   if (image.isNull()) return {};
   // radius is the CSS blur() value, a standard deviation in points.
   constexpr int factor = 4;

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Stands in for room237-core next to a QA copy of the app and forwards to the real core (room237-core.real).
-Only for test_listing_order.py: replies to get_albums_detached are held, released in a chosen order and optionally
-stripped of album rows, as an album walk that raced a move would return them. Control: JSON in $LISTING_PROXY_CONTROL."""
+"""Stands between a QA app and its core (ROOM237_QA_CORE_PROCESS) and forwards to the app's own core server
+($LISTING_PROXY_APP --qa-core-server). Only for test_listing_order.py: replies to get_albums_detached are held, released
+in a chosen order and optionally stripped of album rows, as an album walk that raced a move would return them.
+Control: JSON in $LISTING_PROXY_CONTROL."""
 import json, os, subprocess, sys, threading, time
 here = os.path.dirname(os.path.abspath(__file__))
-real = subprocess.Popen([os.path.join(here, "room237-core.real"), *sys.argv[1:]], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+real = subprocess.Popen([os.environ["LISTING_PROXY_APP"], "--qa-core-server", *sys.argv[1:]], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 control = os.environ["LISTING_PROXY_CONTROL"]
 lock = threading.Lock()
 listing_ids, held = [], {}

@@ -1,29 +1,22 @@
 #!/bin/bash
 # build.sh OUT: tar.gz, AppImage, deb and update payloads for Linux x86_64, built on Ubuntu 22.04 (glibc 2.35).
 # Environment: ROOM237_SOURCE (contains qt/), ROOM237_BUILD_CACHE, ROOM237_QT_LINUX (Qt gcc_64 directory),
-# ROOM237_DEPS (ffmpeg-linux-x86_64, appimagetool, runtime-x86_64), ROOM237_SBOM, ROOM237_UPDATE_PUBKEY; cargo, cmake
-# and ninja on PATH. ROOM237_QA=1 builds the test variant with the QA driver (qt/tests); it always compiles its own core.
+# ROOM237_DEPS (ffmpeg-linux-x86_64, appimagetool, runtime-x86_64), ROOM237_SBOM, ROOM237_UPDATE_PUBKEY,
+# ROOM237_CORE_SOURCES; cmake and ninja on PATH. ROOM237_QA=1 builds the test variant with the QA driver (qt/tests).
 set -euo pipefail
 OUT=$1; SRC=${ROOM237_SOURCE:?}/qt; VERSION=$(cat "$SRC/VERSION"); QT=${ROOM237_QT_LINUX:?}; DEPS=${ROOM237_DEPS:?}
 BUILD=${ROOM237_BUILD_CACHE:?}; JOBS=${ROOM237_BUILD_JOBS:-6}
-export CARGO_TARGET_DIR=$BUILD/core ROOM237_VERSION="$VERSION"
-QA_CMAKE=(-DROOM237_QA=OFF); QA_CARGO=(); QA_SUFFIX=
+export ROOM237_VERSION="$VERSION"
+QA_CMAKE=(-DROOM237_QA=OFF); QA_SUFFIX=
 if [ "${ROOM237_QA:-0}" = 1 ]; then
-  QA_CMAKE=(-DROOM237_QA=ON); QA_CARGO=(--features qa); QA_SUFFIX=-qa; unset ROOM237_CORE_BINARY
+  QA_CMAKE=(-DROOM237_QA=ON); QA_SUFFIX=-qa
 fi
-if [ -n "${ROOM237_CORE_BINARY:-}" ]; then
-  [ "$(sha256sum "$ROOM237_CORE_BINARY" | cut -d' ' -f1)" = "${ROOM237_CORE_SHA256:?reused core needs its SHA-256}" ] || { echo "reused core SHA-256 mismatch" >&2; exit 3; }
-  CORE_BIN=$ROOM237_CORE_BINARY
-else
-  cargo build --locked --release ${QA_CARGO[@]+"${QA_CARGO[@]}"} -j "$JOBS" --manifest-path "$SRC/core/Cargo.toml"
-  CORE_BIN=$BUILD/core/release/room237-core
-fi
-cmake -S "$SRC/app" -B "$BUILD/qt-$VERSION$QA_SUFFIX" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT" "${QA_CMAKE[@]}"
+cmake -S "$SRC/app" -B "$BUILD/qt-$VERSION$QA_SUFFIX" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT" -DROOM237_CORE_SOURCES="${ROOM237_CORE_SOURCES:-}" -DROOM237_UPDATE_PUBKEY="${ROOM237_UPDATE_PUBKEY:-}" "${QA_CMAKE[@]}"
 cmake --build "$BUILD/qt-$VERSION$QA_SUFFIX" -j "$JOBS"
 STAGE=$OUT/stage/room237
 [ ! -e "$OUT/stage" ] || { echo "Refusing to replace $OUT/stage" >&2; exit 2; }; mkdir -p "$STAGE/lib" "$STAGE/plugins" "$STAGE/licenses"
 cp "$BUILD/qt-$VERSION$QA_SUFFIX/room237" "$STAGE/room237"
-cp "$CORE_BIN" "$STAGE/room237-core"
+cp "$BUILD/qt-$VERSION$QA_SUFFIX/room237-core" "$STAGE/room237-core"
 cp "$DEPS/ffmpeg-linux-x86_64" "$STAGE/ffmpeg"
 chmod 755 "$STAGE/ffmpeg"
 for plugin in platforms/libqxcb.so platforms/libqwayland.so platforms/libqoffscreen.so styles platformthemes/libqxdgdesktopportal.so xcbglintegrations/libqxcb-glx-integration.so wayland-shell-integration wayland-decoration-client wayland-graphics-integration-client tls/libqopensslbackend.so imageformats/libqgif.so imageformats/libqjpeg.so imageformats/libqwebp.so imageformats/libqtiff.so imageformats/libqsvg.so imageformats/libqico.so iconengines/libqsvgicon.so multimedia/libffmpegmediaplugin.so; do

@@ -1,6 +1,7 @@
 #include "model.h"
 #include <QTimer>
 #include "thumbs.h"
+#include <QFileInfo>
 #include <QJsonArray>
 MediaItem mediaFromJson(const QJsonObject &o) {
   MediaItem m;
@@ -17,8 +18,10 @@ MediaItem mediaFromJson(const QJsonObject &o) {
   m.height = o.value(QLatin1String("height")).toInt();
   m.dateAdded = o.value(QLatin1String("dateAdded")).toDouble();
   m.dateTaken = o.value(QLatin1String("dateTaken")).toDouble();
+  m.displayName = o.value(QLatin1String("displayName")).toString();
   return m;
 }
+QString MediaItem::extension() const { return QFileInfo(label()).suffix().toLower(); }
 GalleryModel::GalleryModel(CoreClient *core, QObject *parent) : QObject(parent), core_(core) {}
 QJsonObject GalleryModel::query(int page) const {
   return {{QStringLiteral("rootDir"), root}, {QStringLiteral("albumId"), album.isEmpty() || favoritesAlbum ? QJsonValue() : QJsonValue(album)}, {QStringLiteral("favoritesOnly"), favoritesOnly || favoritesAlbum}, {QStringLiteral("sortKey"), sortKey}, {QStringLiteral("sortDir"), sortDir}, {QStringLiteral("randomSeed"), randomSeed}, {QStringLiteral("page"), page}};
@@ -272,7 +275,7 @@ void GalleryModel::ensureGeometry(std::function<void()> done) {
     next.reserve(rows.size());
     for (const auto &row : rows) {
       const QJsonObject o = row.toObject();
-      next.push_back({o.value(QLatin1String("name")).toString(), o.value(QLatin1String("revision")).toString(), o.value(QLatin1String("albumId")).toString(), o.value(QLatin1String("albumName")).toString(), qMax(1, o.value(QLatin1String("width")).toInt()), qMax(1, o.value(QLatin1String("height")).toInt()), o.value(QLatin1String("favorite")).toBool()});
+      next.push_back({o.value(QLatin1String("name")).toString(), o.value(QLatin1String("revision")).toString(), o.value(QLatin1String("albumId")).toString(), o.value(QLatin1String("albumName")).toString(), qMax(1, o.value(QLatin1String("width")).toInt()), qMax(1, o.value(QLatin1String("height")).toInt()), o.value(QLatin1String("favorite")).toBool(), o.value(QLatin1String("displayName")).toString()});
     }
     geometry_ = std::move(next);
     geometryVersion_ = version;
@@ -294,6 +297,7 @@ MediaItem GalleryModel::itemFromGeometry(int index) const {
   m.width = g.width;
   m.height = g.height;
   m.favorite = g.favorite;
+  m.displayName = g.displayName;
   return m;
 }
 void GalleryModel::refreshFavoriteCount(std::function<void()> done) {

@@ -2,6 +2,7 @@
 #include "platform.h"
 #ifdef ROOM237_QA
 #include "qa.h"
+#include "qa_core_server.h"
 #include "qa_fence.h"
 #include "qa_scroll_log.h"
 #endif
@@ -30,6 +31,9 @@ int main(int argc, char **argv) {
       return 0;
     }
   }
+#ifdef ROOM237_QA
+  if (isQaCoreServer(argc, argv)) return runQaCoreServer(argc, argv);
+#endif
   installAccessibilityFactory();
   // Pixels are sRGB; the window system converts them for a wide-gamut display.
   QSurfaceFormat format = QSurfaceFormat::defaultFormat();
@@ -74,14 +78,7 @@ int main(int argc, char **argv) {
     qaTrace("legacy-discovery", legacy);
   }
   QDir().mkpath(profile);
-  const QString core = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral(
-#ifdef Q_OS_WIN
-      "room237-core.exe"
-#else
-      "room237-core"
-#endif
-      ));
-  MainWindow window(core, profile, root, legacy);
+  MainWindow window(profile, root, legacy);
   window.show();
 #ifdef ROOM237_QA
   if (qa) new QaDriver(&window, quint16(port.toUShort()), fence);

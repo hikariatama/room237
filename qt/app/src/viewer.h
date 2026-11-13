@@ -10,6 +10,7 @@
 #include <QVideoWidget>
 #include <QWidget>
 #include <atomic>
+#include <QIODevice>
 #include <memory>
 class SeekBar;
 class Viewer : public QWidget {
@@ -132,6 +133,7 @@ private:
   QLabel *failureText_;
   TextButton *retryButton_, *failureRevealButton_;
   std::unique_ptr<Animation> animation_;
+  std::unique_ptr<QIODevice> sealedVideo_;  // Decrypted stream of the open video in an encrypted root.
   QTimer animationTimer_;
   bool savedMuted_ = false;
   float savedVolume_ = 1;

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Imports every fixture through the running app and checks thumbnail, metadata, viewer and playback.
-Usage: test_formats.py APP_BINARY FIXTURES EXPECTED_JSON WORK_DIR [--wrapper CMD...] writes results.json in WORK_DIR."""
+Usage: test_formats.py APP_BINARY FIXTURES EXPECTED_JSON WORK_DIR [--wrapper CMD...] writes results.json in WORK_DIR.
+--encrypted encrypts the library with security hardening (QA test factor) before the checks."""
 import json, os, shutil, sys, time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,15 +45,26 @@ try:
             break
         time.sleep(0.5)
     time.sleep(1.5)
+    if "--encrypted" in sys.argv:
+        app.op("core_call", method="vault_setup", params={"root": path_map(root), "password": "formats password", "factors": ["test"]})
+        for _ in range(1200):
+            if json.loads((root / ".room237-vault").read_text())["state"] == "encrypted":
+                break
+            time.sleep(0.25)
+        print("encrypted", json.loads((root / ".room237-vault").read_text())["state"], flush=True)
+        app.op("open_root", path=path_map(root))
+        app.wait_albums(120)
+        time.sleep(1.5)
     total = app.op("activate", album="Formats", noWait=True)["total"]
     print("total", total)
     for index in range(total):
         item = app.op("item", index=index)
-        name = item["name"]
+        # In an encrypted root the file on disk has a random name; the original is its label.
+        name, stored = item.get("label") or item["name"], item["name"]
         facts = expected.get(name, {})
         result = {"listed": True, "width": item["width"], "height": item["height"], "video": item["video"], "dateTaken": item["dateTaken"], "dateAdded": item["dateAdded"]}
         thumb = None
-        for candidate in (root / "Formats" / ".room237-thumb").glob(name + "*"):
+        for candidate in (root / "Formats" / ".room237-thumb").glob(stored + "*"):
             if candidate.suffix == ".webp" and not candidate.name.endswith(".blur.webp"):
                 thumb = candidate
         result["thumbnail"] = bool(thumb and thumb.stat().st_size > 0)

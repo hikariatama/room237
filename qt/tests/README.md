@@ -1,7 +1,7 @@
 # Integration tests
 
-Each suite launches a Room237 built with the QA driver (a Debug build, or `-DROOM237_QA=ON` for the app and
-`--features qa` for the core; the app binary inside the bundle on macOS) and talks to it over a local port (`qa.py`). Every suite must run in its own disposable fence:
+Each suite launches a Room237 built with the QA driver (a Debug build, or `-DROOM237_QA=ON`; the app binary inside
+the bundle on macOS) and talks to it over a local port (`qa.py`). Every suite must run in its own disposable fence:
 
 ```sh
 export ROOM237_QA_FENCE=/abs/path/to/new/empty/dir   # canonical absolute path, created beforehand
@@ -17,17 +17,25 @@ Python 3.11+ with Pillow is required (`cryptography` for `test_update.py`). Fixt
   (HEIC generation needs macOS `sips`; `ffmpeg` on `PATH`). Copy the result into the fence before use.
 - `fixtures/tauri-profile/` is a synthetic profile written by the 6.x Tauri app's QA build.
 
+## Core stand-ins
+
+A QA build talks to a separate process instead of its built-in core when `ROOM237_QA_CORE_PROCESS` names one; the
+process speaks JSON lines on stdin/stdout. `Room237 --qa-core-server --profile DIR` serves the real core that way.
+`listing_proxy.py` sits between the two to hold and reorder answers; `test_root_fence.py` forges replies.
+
 ## Offscreen suites (macOS, Linux)
 
 | Suite | Arguments | Checks |
 |---|---|---|
-| `test_core_package.py` | `CORE_BINARY WORK` | `room237-core` protocol smoke without the UI |
+| `test_core_package.py` | `CORE_BINARY WORK` | `room237-core --version`, and the core protocol of `Room237 --qa-core-server` without the window |
 | `test_qa_helpers.py` | `FENCE_PROBE WORK` | fence path rules in `qa_fence.cpp` (build `fence_probe/` with `-DROOM237_SOURCE_ROOT=<repo>`) |
 | `test_root_fence.py` | `APP WORK OUTPUT_DIR` | QA fence refusals at startup, root change and core calls |
 | `test_isolation.py` | `APP WORK` | explicit profiles stay isolated; Tauri profile import receipts |
 | `test_external_album.py` | `APP WORK` | albums renamed, added or removed outside the app |
 | `test_listing_order.py` | `APP_BUNDLE_OR_DIR WORK` | late or stale core listings never replace newer ones |
-| `test_formats.py` | `APP FIXTURES EXPECTED_JSON WORK` | thumbnails, sizes and viewer for every format |
+| `test_formats.py` | `APP FIXTURES EXPECTED_JSON WORK [--encrypted]` | thumbnails, sizes and viewer for every format; `--encrypted` checks them in an encrypted root |
+| `test_hardening.py` | `APP WORK` | security hardening: setup, recovery key, lock and unlock, decoy password, copies for other apps, nested folder, removal |
+| `test_processing.py` | `APP WORK` | the processing screen covers the room during indexing and encryption, takes clicks and shortcuts, saves worker counts |
 | `test_functional.py` | `APP FIXTURES WORK` | albums, favorites, selection, clipboard import, move, delete, dates, viewer, duplicates, external changes |
 | `test_near_duplicates.py` | `APP WORK` | near-duplicate precision and recall against ground truth |
 | `test_duplicate_positive.py` | `APP WORK` | exact duplicates; same stem with different extensions |

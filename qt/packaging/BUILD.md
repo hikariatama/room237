@@ -22,11 +22,10 @@ Every build input is pinned in the repository and checked before use:
 
 | File | Contents |
 |---|---|
-| `ci/deps.lock.json` | URL, size and SHA-256 of Qt 6.11.3 (official online repository archives for macOS, Linux gcc_64 and Windows llvm-mingw), Python 3.13 (python-build-standalone), `rustup-init` 1.29.3, FFmpeg 9.0.2 command-line builds (macOS: Martin Riedl, Linux and Windows: BtbN month-end build), llvm-mingw 20260616 (UCRT, Linux host), appimagetool 1.9.1 and the AppImage type-2 runtime 20251108, and the digest of the `ubuntu:22.04` image |
+| `ci/deps.lock.json` | URL, size and SHA-256 of Qt 6.11.3 (official online repository archives for macOS, Linux gcc_64 and Windows llvm-mingw), Python 3.13 (python-build-standalone), FFmpeg 9.0.2 command-line builds (macOS: Martin Riedl, Linux and Windows: BtbN month-end build), llvm-mingw 20260616 (UCRT, Linux host), appimagetool 1.9.1 and the AppImage type-2 runtime 20251108, the digest of the `ubuntu:22.04` image, and the C sources compiled into the core (group `core-sources`: SQLite 3.51.1 amalgamation, libwebp 1.6.0, Monocypher 4.0.2, zlib 1.3.1) |
 | `ci/requirements.txt` | Python packages with every published wheel hash (`pip --require-hashes --only-binary :all:`), including CMake 4.4.4 and Ninja 1.13.2 |
 | `ci/apt-packages.txt` | Ubuntu 22.04 packages for the Linux and Windows jobs (the installed versions are recorded per run) |
 
-Rust 1.99.1 is installed by `rustup-init`, which checks every component against the signed channel manifest.
 Qt archives were compared with complete Qt installations of the same version: every shared file is byte-identical
 apart from the prefix in `lib/pkgconfig/*.pc`.
 
@@ -41,7 +40,7 @@ qt/packaging/ci/build.sh macos-arm64 "$ROOT" "$FIXTURES"     # FIXTURES: qt/test
 
 `bootstrap.sh` installs everything under `ROOT` (downloads are cached in `ROOM237_DEPS_CACHE` when set) and writes
 `ROOT/env.sh`; it installs nothing elsewhere. `build.sh` makes the DMG background, runs the driver with `--qa`,
-`cargo test` and the offscreen suites (`qt/tests/run_offscreen.py`) against the QA variants, and copies the N release
+the core unit tests (`qt/core/tests`) and the offscreen suites (`qt/tests/run_offscreen.py`) against the QA variants, and copies the N release
 packages and reports to `ROOT/upload`.
 Linux and Windows run in the pinned Ubuntu image, the same way the workflow does, from a clean export of the commit:
 
@@ -81,17 +80,7 @@ The deb is updated through the package manager.
 
 ### Reusing an accepted core
 
-When `qt/core` is byte-identical to an accepted release, the core binaries can be shipped instead of recompiled:
-
-```sh
-python3 qt/packaging/core_reuse.py prepare "$ACCEPTED_WORK" "$CORE_INPUTS"
-qt/packaging/release_all.sh … --reuse-core "$CORE_INPUTS/manifest.json" [--share-identical-with "$ACCEPTED_WORK"]
-```
-
-`prepare` takes `room237-core` for N and N+1 of every platform from the accepted work directory, checks each against
-the released archives, its version string, the production key and the absence of a QA key, and records the SHA-256
-of every `qt/core` file. The driver refuses before running cargo if any of that differs. `--share-identical-with`
-turns byte-identical outputs into APFS clones of the accepted files.
+`--share-identical-with ACCEPTED_WORK` turns byte-identical outputs into APFS clones of an accepted release's files.
 
 ## Release on GitHub
 
@@ -110,8 +99,8 @@ published and is the latest one; a draft is invisible to them.
 
 ## Keys
 
-- The app trusts the updater key compiled into `room237-core`: by default the 6.x key `RWSptBX…` in
-  `qt/core/src/update.rs` (`--trust-pubkey` builds with another one). It is written to `trust-public-key.txt` and
+- The app trusts the updater key compiled into it: by default the 6.x key `RWSptBX…` in
+  `qt/core/src/update.cpp` (`--trust-pubkey` builds with another one). It is written to `trust-public-key.txt` and
   `RELEASE.json`.
 - `--key`/`--pubkey` of the driver is a throwaway pair for the loopback QA feed (`sign_update.py keygen`); the driver
   refuses it if it equals the trusted key. Shipped apps reject that feed; only the QA variants accept it, through a
@@ -140,7 +129,7 @@ white icon labels would fall below a 3:1 contrast. The photograph and how it was
 `verify_packages.py` runs after every platform build:
 
 - every shipped Mach-O/ELF/PE file, its rpaths and import closure, Qt plugins, codec libraries, `ffmpeg`, icons,
-  notices and the Rust SBOM;
+  notices and the core SBOM;
 - no builder paths in shipped code: the work, source and SDK directories (`--forbid`), the builder's `~/.cache` and
   cloud folders, including UTF-16 strings in PE files;
 - DMGs are mounted read-only (`hdiutil -readonly -nobrowse -noautoopen`) to check the Applications link, `.DS_Store`,
@@ -153,6 +142,9 @@ Signing: macOS packages are ad-hoc signed only (no Developer ID, no notarization
 signature.
 
 ## Known limits
+
+- Security hardening: the Windows Hello factor is compiled but has not run on Windows; the security-key factor has not
+  run against a physical key. The TPM factor is tested against swtpm, not a hardware TPM.
 
 - Windows packages are checked statically only. Installer, Explorer drag and drop, clipboard and Direct3D need a real
   Windows machine.

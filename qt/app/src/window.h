@@ -5,10 +5,12 @@ class QFileDialog;
 #include "overlays.h"
 #include "panels.h"
 #include "root_watcher.h"
+#include "security.h"
 #include "sidebar.h"
 #include "updater.h"
 #include "viewer.h"
 #include <QMainWindow>
+#include <array>
 #include <QSet>
 #include <QStackedWidget>
 class HashPill;
@@ -17,11 +19,12 @@ struct UiState {
   double sidebarFraction = 0.2;  // Default 20% of the width, 16% to 24%.
   QString sortKey = QStringLiteral("name"), sortDir = QStringLiteral("asc"), rootDir, decoyRoot, language = QStringLiteral("en"), layout = QStringLiteral("default");
   bool contentProtected = false, scroll60 = false, autoUpdate = true;
+  QStringList hardeningNeverAsk;  // Plain roots for which encryption is not offered.
 };
 class MainWindow : public QMainWindow {
   Q_OBJECT
 public:
-  MainWindow(const QString &coreBinary, const QString &profile, const QString &root, const QString &legacyProfile);
+  MainWindow(const QString &profile, const QString &root, const QString &legacyProfile);
   ~MainWindow() override;
   CoreClient *core() { return &core_; }
   GalleryModel *model() { return &model_; }
@@ -67,6 +70,11 @@ public:
   bool displayDecoy() const { return displayDecoy_; }
   bool lockscreenEnabled() const { return lockscreenEnabled_; }
   bool privacyEnabled() const { return privacyEnabled_; }
+  bool hardeningEnabled() const { return hardening_; }
+  // The open root is encrypted and unlocked: screenshots are blocked and files leave only decrypted, on request.
+  bool inProtectedRoot() const { return !vaultRoot_.isEmpty() && !displayDecoy_; }
+  VaultUnlock *vaultScreen() { return vaultScreen_; }
+  PreloadOverlay *processingScreen() { return preload_; }
   void setFavorite(const MediaItem &item, bool favorite, std::function<void(QString)> done = {});
   void setItemsDate(const QVector<MediaItem> &items, qint64 timestamp, std::function<void(QString)> done = {});
   void copyItems(const QVector<MediaItem> &items);
@@ -125,6 +133,20 @@ private:
   void showMissingRoot(const QString &root);
   void updateDirectoryTexts();
   void updatePrivacySurface();
+  QJsonObject vaultStatus(const QString &root) const;
+  void showVaultUnlock(const QString &root);
+  void onVaultUnlocked(bool decoy);
+  void lockVault();
+  void offerEncryption();
+  void startHardeningSetup();
+  void removeEncryption();
+  void replaceFactor();
+  void onVaultProgress(const QJsonObject &progress);
+  void setProcessing(bool processing);
+  // Decrypted copies of `items` for another app, after the user agreed in this unlock.
+  void confirmExport(std::function<void()> proceed);
+  std::optional<QList<QUrl>> exportUrls(const QVector<MediaItem> &items);
+  void applyExportGate();
   void setUnfocused(bool unfocused);
   void scheduleReconcile(const QString &directory);
   void reconcileNow();
@@ -170,6 +192,14 @@ private:
   quint64 lastKeyStamp_ = 0;
   int lastKey_ = 0;
   PrivacyShield *shield_;
+  VaultUnlock *vaultScreen_;
+  QTimer workersSave_;
+  std::array<int, 3> preloadWorkers_{4, 4, 4};  // Preview, metadata and encryption threads.
+  QList<QPointer<QAction>> disabledActions_;
+  QString vaultRoot_;  // The open root when it is encrypted and unlocked.
+  QSet<QString> offeredRoots_;
+  QTimer vaultRefresh_;
+  bool hardening_ = false, exportAllowed_ = false;
   PreloadOverlay *preload_;
   QLabel *dragHint_;
   Updater *updater_;

@@ -80,7 +80,7 @@ bool Updater::qaCoreAllowed(const QString &method, const QJsonObject &params) {
   if (!qaFixtureAllowed()) return false;
   const auto f = fixture();
   if (method == QLatin1String("update_cleanup")) return params.value("install") == f.value("install");
-  if (method == QLatin1String("update_check")) return true; // Rust verifies the signature and fixture URL.
+  if (method == QLatin1String("update_check")) return true; // The core verifies the signature and fixture URL.
   const auto p = params.value("plan").toObject();
   if (p.value("install") != f.value("install")) return false;
   if (method == QLatin1String("update_stage")) {
