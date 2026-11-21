@@ -1,4 +1,5 @@
 #include "native_image.h"
+#include "file_access.h"
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
@@ -23,7 +24,7 @@ struct Owned {
 };
 
 CGImageSourceRef openSource(const QString &path) {
-  const QByteArray bytes = QFile::encodeName(path);
+  const QByteArray bytes = QFile::encodeName(decoderPath(path));
   CFURLRef url = CFURLCreateFromFileSystemRepresentation(kCFAllocatorDefault, reinterpret_cast<const UInt8 *>(bytes.constData()), CFIndex(bytes.size()), false);
   if (!url) return nullptr;
   CGImageSourceRef source = CGImageSourceCreateWithURL(url, nullptr);

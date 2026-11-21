@@ -179,7 +179,7 @@ MainWindow::MainWindow(const QString &profile, const QString &root, const QStrin
     });
   });
   connect(updater_, &Updater::downloading, this, [this] {
-    toasts_->update(updateToast_, ToastHost::Info, t("update.downloading"), 0);
+    updateToast_ = toasts_->update(updateToast_, ToastHost::Info, t("update.downloading"), 0);
     toasts_->setAction(updateToast_, t("update.cancel"), [this] { updater_->cancel(); });
     toasts_->setProgress(updateToast_, 0);
   });
@@ -630,8 +630,6 @@ void MainWindow::loadUiState() {
   ui_.rootDir = o.value(QLatin1String("rootDir")).toString();
   ui_.decoyRoot = o.value(QLatin1String("decoyRoot")).toString();
   ui_.contentProtected = o.value(QLatin1String("contentProtected")).toBool();
-  ui_.hardeningNeverAsk.clear();
-  for (const QJsonValue &root : o.value(QLatin1String("hardeningNeverAsk")).toArray()) ui_.hardeningNeverAsk << root.toString();
   if (const QString language = o.value(QLatin1String("language")).toString(); language == QLatin1String("en") || language == QLatin1String("ru")) ui_.language = language;
   if (const QString layout = o.value(QLatin1String("layout")).toString(); layout == QLatin1String("default") || layout == QLatin1String("apple") || layout == QLatin1String("masonry")) ui_.layout = layout;
   ui_.scroll60 = o.value(QLatin1String("scroll60hz")).toBool();
@@ -640,7 +638,7 @@ void MainWindow::loadUiState() {
 }
 void MainWindow::saveUiState() {
   if (uiRootsRefused_ || !QaFence::rootsAllowed({{QStringLiteral("rootDir"), ui_.rootDir}, {QStringLiteral("decoyRoot"), ui_.decoyRoot}})) return;
-  const QJsonObject o{{QStringLiteral("columns"), ui_.columns}, {QStringLiteral("sortKey"), ui_.sortKey}, {QStringLiteral("sortDir"), ui_.sortDir}, {QStringLiteral("rootDir"), ui_.rootDir.isEmpty() ? QJsonValue() : QJsonValue(ui_.rootDir)}, {QStringLiteral("decoyRoot"), ui_.decoyRoot.isEmpty() ? QJsonValue() : QJsonValue(ui_.decoyRoot)}, {QStringLiteral("contentProtected"), ui_.contentProtected}, {QStringLiteral("language"), ui_.language}, {QStringLiteral("layout"), ui_.layout}, {QStringLiteral("scroll60hz"), ui_.scroll60}, {QStringLiteral("autoUpdate"), ui_.autoUpdate}, {QStringLiteral("sidebarFraction"), ui_.sidebarFraction}, {QStringLiteral("hardeningNeverAsk"), QJsonArray::fromStringList(ui_.hardeningNeverAsk)}};
+  const QJsonObject o{{QStringLiteral("columns"), ui_.columns}, {QStringLiteral("sortKey"), ui_.sortKey}, {QStringLiteral("sortDir"), ui_.sortDir}, {QStringLiteral("rootDir"), ui_.rootDir.isEmpty() ? QJsonValue() : QJsonValue(ui_.rootDir)}, {QStringLiteral("decoyRoot"), ui_.decoyRoot.isEmpty() ? QJsonValue() : QJsonValue(ui_.decoyRoot)}, {QStringLiteral("contentProtected"), ui_.contentProtected}, {QStringLiteral("language"), ui_.language}, {QStringLiteral("layout"), ui_.layout}, {QStringLiteral("scroll60hz"), ui_.scroll60}, {QStringLiteral("autoUpdate"), ui_.autoUpdate}, {QStringLiteral("sidebarFraction"), ui_.sidebarFraction}};
   QSaveFile file(QDir(profile_).filePath(QStringLiteral("ui-state.json")));
   if (file.open(QIODevice::WriteOnly)) {
     file.write(QJsonDocument(o).toJson());
@@ -986,7 +984,7 @@ bool MainWindow::clearDecoy() {
   if (wasShowing) openRoot(root);
   return true;
 }
-bool MainWindow::openRoot(const QString &root) {
+bool MainWindow::openRoot(const QString &root, QString album) {
   if (!rootAllowed(root)) return false;
   const QString active = QaFence::enabled() ? QFileInfo(root).canonicalFilePath() : root;
   if (!rootAllowed(active)) return false;
@@ -1011,6 +1009,7 @@ bool MainWindow::openRoot(const QString &root) {
     tree_->dropIcons();
     SecureMedia::clearExports();
   }
+  if (active != model_.root) dropVaultPass();
   vaultRoot_ = vault.value(QLatin1String("vault")).toBool() ? active : QString();
   vaultScreen_->hide();
   if (inProtectedRoot()) inactivity_.start();
@@ -1033,7 +1032,7 @@ bool MainWindow::openRoot(const QString &root) {
   rebuildTree();
   updateStatus();
   updateHeader();
-  model_.refreshAlbums([this] {
+  model_.refreshAlbums([this, album] {
     albumsReady_ = true;
     updateStatus();
     updateWatcher();
@@ -1045,6 +1044,7 @@ bool MainWindow::openRoot(const QString &root) {
       emit healthy();
     }
     offerEncryption();
+    if (model_.album.isEmpty() && !album.isEmpty() && model_.albumById(album)) return activateAlbum(album);
     // Open the first album when none is selected.
     if (model_.album.isEmpty() && !model_.albums.isEmpty() && !QaFence::enabled()) {
       for (const AlbumInfo &album : model_.albums)
@@ -1357,7 +1357,8 @@ void MainWindow::reconcileNow() {
 void MainWindow::afterMutation(const QStringList &albums, std::function<void()> done) {
   auto refresh = [this, done = std::move(done)]() mutable {
     model_.refreshAlbums([this, done = std::move(done)]() mutable {
-      model_.reload(std::move(done));
+      // The old listing stays on screen until the new one arrives.
+      model_.reload(std::move(done), true);
       model_.refreshFavoriteCount();
     });
   };
@@ -1379,15 +1380,25 @@ void MainWindow::moveItems(const QVector<MediaItem> &items, const QString &targe
     return;
   }
   const int count = items.size();
+  // Favorites list files of every album: a moved one stays.
+  if (!model_.favoritesAlbum) gallery_->removeItems(items);
   const int toast = toasts_->show(ToastHost::Loading, I18n::n("toast.moveMedia.loading", count));
-  const QString targetPath = target->path, source = items.first().albumPath, sourceId = items.first().albumId;
+  const QString targetPath = target->path;
+  QMap<QString, QVector<MediaItem>> byAlbum;
+  QStringList touched{targetId};
+  for (const MediaItem &item : items) {
+    byAlbum[item.albumPath].push_back(item);
+    if (!touched.contains(item.albumId)) touched << item.albumId;
+  }
   auto batches = std::make_shared<QVector<QVector<MediaItem>>>();
-  for (int i = 0; i < count; i += 300) batches->push_back(items.mid(i, 300));
+  for (auto it = byAlbum.cbegin(); it != byAlbum.cend(); ++it)
+    for (int i = 0; i < it.value().size(); i += 300) batches->push_back(it.value().mid(i, 300));
   auto step = std::make_shared<std::function<void(int)>>();
-  auto finish = [this, done, toast, count, targetId, sourceId](const QString &error) {
+  auto finish = [this, done, toast, count, touched](const QString &error) {
     if (error.isEmpty()) toasts_->update(toast, ToastHost::Success, I18n::n("toast.moveMedia.success", count));
     else toasts_->update(toast, ToastHost::Error, I18n::n("toast.moveMedia.failed", count));
-    afterMutation({sourceId, targetId}, [done, error] {
+    afterMutation(touched, [this, done, error] {
+      gallery_->settleRemoval();
       if (done) done(error);
     });
   };
@@ -1402,20 +1413,14 @@ void MainWindow::moveItems(const QVector<MediaItem> &items, const QString &targe
       observed.push_back(QJsonObject{{QStringLiteral("path"), m.path()}, {QStringLiteral("revision"), m.revision}});
       names.push_back(m.name);
     }
-    core_.call(QStringLiteral("validate_media_revisions"), {{QStringLiteral("observed"), observed}}, [=, this](const QJsonValue &, const QString &validate) {
-      if (!validate.isEmpty()) {
+    const QString source = batches->at(n).first().albumPath;
+    core_.call(QStringLiteral("move_media_batch"), {{QStringLiteral("source"), source}, {QStringLiteral("target"), targetPath}, {QStringLiteral("media"), names}, {QStringLiteral("observed"), observed}}, [=, this](const QJsonValue &result, const QString &error) {
+      if (!error.isEmpty() || !result.toArray().isEmpty()) {
         QTimer::singleShot(0, [step] { *step = nullptr; });
-        finish(validate);
+        finish(error.isEmpty() ? QStringLiteral("failed %1").arg(result.toArray().size()) : error);
         return;
       }
-      core_.call(QStringLiteral("move_media_batch"), {{QStringLiteral("source"), source}, {QStringLiteral("target"), targetPath}, {QStringLiteral("media"), names}}, [=, this](const QJsonValue &result, const QString &error) {
-        if (!error.isEmpty() || !result.toArray().isEmpty()) {
-          QTimer::singleShot(0, [step] { *step = nullptr; });
-          finish(error.isEmpty() ? QStringLiteral("failed %1").arg(result.toArray().size()) : error);
-          return;
-        }
-        (*step)(n + 1);
-      });
+      (*step)(n + 1);
     });
   };
   (*step)(0);
@@ -1426,6 +1431,7 @@ void MainWindow::deleteItems(const QVector<MediaItem> &items, std::function<void
     return;
   }
   const int count = items.size();
+  gallery_->removeItems(items);
   const int toast = toasts_->show(ToastHost::Loading, I18n::n("toast.deleteMedia.loading", count));
   // Favorites can span albums; each album is one operation.
   QMap<QString, QVector<MediaItem>> byAlbum;
@@ -1440,7 +1446,8 @@ void MainWindow::deleteItems(const QVector<MediaItem> &items, std::function<void
   auto finish = [this, done, toast, count, touched](const QString &error) {
     if (error.isEmpty()) toasts_->update(toast, ToastHost::Success, I18n::n("toast.deleteMedia.success", count));
     else toasts_->update(toast, ToastHost::Error, I18n::n("toast.deleteMedia.failed", count));
-    afterMutation(touched, [done, error] {
+    afterMutation(touched, [this, done, error] {
+      gallery_->settleRemoval();
       if (done) done(error);
     });
   };
@@ -1489,7 +1496,12 @@ void MainWindow::importPaths(const QStringList &paths, const QString &albumId, s
     if (offset >= media.size()) {
       QTimer::singleShot(0, [step] { *step = nullptr; });
       const int added = count - *failed;
-      if (*failed == 0) toasts_->update(toast, ToastHost::Success, I18n::n("toast.addedFiles", added));
+      if (*failed == 0 && inProtectedRoot()) {
+        // One toast for adding and encrypting: it finishes with a lock once the files are sealed.
+        const QString text = I18n::n("toast.addedFiles", added);
+        if (vaultPass_) sealToasts_.push_back({toast, text});
+        else toasts_->setIcon(toasts_->update(toast, ToastHost::Success, text), "lock");
+      } else if (*failed == 0) toasts_->update(toast, ToastHost::Success, I18n::n("toast.addedFiles", added));
       else if (added > 0) toasts_->update(toast, ToastHost::Error, t("toast.partialImport", {{"added", QString::number(added)}, {"failed", QString::number(*failed)}, {"files", failedNames->mid(0, 3).join(QStringLiteral(", "))}}));
       else toasts_->update(toast, ToastHost::Error, t("toast.noFilesAdded"));
       afterMutation({albumId}, [done, failed] {
@@ -2143,8 +2155,16 @@ void MainWindow::onVaultUnlocked(bool decoy) {
   // The recovery key stands in for a factor that no longer works here.
   if (recovered) QTimer::singleShot(0, this, &MainWindow::replaceFactor);
 }
+void MainWindow::dropVaultPass() {
+  vaultPass_ = false;
+  vaultRefresh_.stop();
+  preload_->finishVault();
+  if (vaultToast_) toasts_->dismiss(std::exchange(vaultToast_, 0));
+  for (const auto &[id, text] : std::exchange(sealToasts_, {})) toasts_->update(id, ToastHost::Success, text);
+}
 void MainWindow::lockVault() {
   const QString root = vaultRoot_;
+  dropVaultPass();
   core_.call(QStringLiteral("vault_lock"), {{QStringLiteral("root"), root}});
   Popover::closeAll(host_);
   viewer_->closeViewer();
@@ -2166,25 +2186,22 @@ void MainWindow::lockVault() {
 }
 void MainWindow::offerEncryption() {
   const QString root = model_.root;
-  if (!hardening_ || root.isEmpty() || displayDecoy_ || !albumsReady_ || preload_->isVisible() || offeredRoots_.contains(root) || ui_.hardeningNeverAsk.contains(root)) return;
+  if (!hardening_ || root.isEmpty() || displayDecoy_ || !albumsReady_ || preload_->isVisible() || offeredRoots_.contains(root)) return;
   const QJsonObject status = vaultStatus(root);
   if (status.value(QLatin1String("vault")).toBool() || status.value(QLatin1String("nested")).toBool()) return;
   offeredRoots_.insert(root);
-  auto *offer = new EncryptOffer(host_, QFileInfo(root).fileName(), [this] { startHardeningSetup(); }, {}, [this, root] {
-    ui_.hardeningNeverAsk << root;
-    saveTimer_.start();
-  });
+  auto *offer = new EncryptOffer(host_, QFileInfo(root).fileName(), [this] { startHardeningSetup(); }, {});
   offer->setObjectName(QStringLiteral("encryptOffer"));
   openCentered(offer);
 }
 void MainWindow::startHardeningSetup() {
   const QString root = model_.root;
   if (root.isEmpty() || displayDecoy_) return;
-  ui_.hardeningNeverAsk.removeAll(root);
   // The decoy password is offered only when there is a decoy gallery to show.
   auto *setup = new HardeningSetup(host_, &core_, root, privacyEnabled_ && !ui_.decoyRoot.isEmpty(), [this, root] {
-    showToast(0, t("security.toast.encrypting"));
-    if (model_.root == root) openRoot(root);
+    if (vaultToast_) toasts_->dismiss(vaultToast_);
+    vaultToast_ = toasts_->show(ToastHost::Loading, t("security.toast.encrypting"));
+    if (model_.root == root) openRoot(root, model_.album);
   });
   setup->setObjectName(QStringLiteral("hardeningSetup"));
   openCentered(setup);
@@ -2192,7 +2209,10 @@ void MainWindow::startHardeningSetup() {
 void MainWindow::removeEncryption() {
   const QString root = vaultRoot_;
   if (root.isEmpty()) return;
-  auto *panel = new RemoveEncryption(host_, &core_, root, [this] { showToast(0, t("security.toast.decrypting")); });
+  auto *panel = new RemoveEncryption(host_, &core_, root, [this] {
+    if (vaultToast_) toasts_->dismiss(vaultToast_);
+    vaultToast_ = toasts_->show(ToastHost::Loading, t("security.toast.decrypting"));
+  });
   panel->setObjectName(QStringLiteral("removeEncryption"));
   openCentered(panel);
 }
@@ -2207,21 +2227,41 @@ void MainWindow::onVaultProgress(const QJsonObject &o) {
   const int done = o.value(QLatin1String("done")).toInt(), total = o.value(QLatin1String("total")).toInt();
   if (root != model_.root) return;
   const bool running = phase == QLatin1String("encrypting") || phase == QLatin1String("decrypting");
-  if (running && total > 0) {
-    preload_->setVault(phase == QLatin1String("encrypting") ? t("vault.overlay.encrypting") : t("vault.overlay.decrypting"), done, total);
-    if (!vaultRefresh_.isActive()) vaultRefresh_.start();
+  if (running) {
+    vaultPass_ = true;
+    // Like indexing, the processing screen is for a whole root; a few files are converted behind the gallery. It waits
+    // for the setup to close: the screen closes every dialog, and the setup shows the recovery key.
+    bool setupOpen = false;
+    for (const HardeningSetup *setup : host_->findChildren<HardeningSetup *>()) setupOpen |= setup->isOpen();
+    if (total >= 100 && !setupOpen) preload_->setVault(phase == QLatin1String("encrypting") ? t("vault.overlay.encrypting") : t("vault.overlay.decrypting"), done, total);
+    if (total > 0 && !vaultRefresh_.isActive()) vaultRefresh_.start();
     return;
   }
+  vaultPass_ = false;
   preload_->finishVault();
   vaultRefresh_.stop();
+  const int toast = std::exchange(vaultToast_, 0);
+  const auto sealed = std::exchange(sealToasts_, {});
+  const auto finish = [this](int id, ToastHost::Kind kind, const QString &text, const QByteArray &icon) {
+    const int shown = id ? toasts_->update(id, kind, text) : toasts_->show(kind, text);
+    if (!icon.isEmpty()) toasts_->setIcon(shown, icon);
+  };
   if (phase == QLatin1String("incomplete")) {
-    showToast(1, t("security.toast.incomplete", {{"error", o.value(QLatin1String("error")).toString()}}));
-    return;
+    const QString text = t("security.toast.incomplete", {{"error", o.value(QLatin1String("error")).toString()}});
+    // The files were added; the error is said once.
+    finish(toast, ToastHost::Error, text, {});
+    for (const auto &[id, added] : sealed) finish(id, ToastHost::Success, added, {});
+  } else if (phase == QLatin1String("decrypted")) {
+    finish(toast, ToastHost::Success, t("security.toast.decrypted"), "lock-open");
+  } else if (phase == QLatin1String("encrypted")) {
+    // A pass after an unlock or an import ends without a toast of its own.
+    if (toast) finish(toast, ToastHost::Success, t("security.toast.encrypted"), "lock");
+    for (const auto &[id, added] : sealed) finish(id, ToastHost::Success, added, "lock");
   }
-  if (phase == QLatin1String("encrypted") && total > 0) showToast(0, t("security.toast.encrypted"));
-  if (phase == QLatin1String("decrypted")) showToast(0, t("security.toast.decrypted"));
-  // New names and previews: the room lists itself again.
-  if (phase == QLatin1String("decrypted") || total > 0) openRoot(root);
+  // Decrypted files are plain again: the root opens as an ordinary one, on the same album.
+  if (phase == QLatin1String("decrypted")) openRoot(root, model_.album);
+  // Encrypted ones have new names and previews on disk: the room lists them again where it is.
+  else if (total > 0) afterMutation({}, {});
 }
 void MainWindow::confirmExport(std::function<void()> proceed) {
   if (exportAllowed_) return proceed();

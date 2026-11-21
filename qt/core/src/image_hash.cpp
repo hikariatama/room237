@@ -1,4 +1,5 @@
 #include "image_hash.h"
+#include "file_access.h"
 
 #include "fs.h"
 #include "util.h"
@@ -267,7 +268,9 @@ Pixels loadImage(const QString &path, const HashConfig &) {
     DecodePermit permit;
     if (auto rgb = decodeWebpRgb(bytes, 8000000)) return *rgb;
   }
-  QImageReader reader(path);
+  QFile input;
+  if (!openFile(input, path, QIODevice::ReadOnly)) fail(input.errorString());
+  QImageReader reader(&input);
   reader.setAutoTransform(false);
   const QByteArray format = reader.format().toLower();
   if (format != "jpeg" && format != "jpg" && format != "png") fail(QStringLiteral("The image format could not be determined"));

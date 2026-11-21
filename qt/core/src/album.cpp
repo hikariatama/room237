@@ -1,4 +1,7 @@
 #include "album.h"
+#include "vault.h"
+#include "file_access.h"
+#include "directory_move.h"
 
 #include "album_tree.h"
 #include "catalog.h"
@@ -147,11 +150,14 @@ QString fallbackMediaMetadata(const QString &p) {
 }
 
 struct AlbumTreeRenameGuard {
+  std::unique_ptr<FileAccess> filesystem;
   std::unique_lock<std::mutex> moving;
   std::unique_ptr<album_tree::TreeLease> tree;
 };
 
-AlbumTreeRenameGuard prepareAlbumTreeRename(const QString &root, const QString &dir) {
+AlbumTreeRenameGuard prepareAlbumTreeRename(const QString &root, const QString &dir, const Directory *admitted = nullptr) {
+  auto filesystem = std::make_unique<FileAccess>(QStringList{root});
+  if (admitted) filesystem->bindDirectory(dir, std::make_shared<Directory>(admitted->share()));
   album_tree::initialize(root);
   for (int attempt = 0; attempt < 3; ++attempt) {
     QStringList albums = walkAlbumPaths(dir);
@@ -173,7 +179,7 @@ AlbumTreeRenameGuard prepareAlbumTreeRename(const QString &root, const QString &
     std::sort(current.begin(), current.end());
     bool pending = false;
     for (const QString &album : current) pending |= media_move::hasJournal(album);
-    if (current == albums && !pending) return {std::move(moving), std::move(tree)};
+    if (current == albums && !pending) return {std::move(filesystem), std::move(moving), std::move(tree)};
   }
   fail(QStringLiteral("Album has pending media moves; retry after they finish"));
 }
@@ -233,7 +239,7 @@ QHash<QString, MoveGroup> logicalMoveGroups(const QString &dir, const QStringLis
   return groups;
 }
 
-void rollbackMovedFiles(const QString &source, const QString &target, const std::vector<PlannedMove> &records) {
+void rollbackMovedFiles(const QString &source, const QString &target, const std::vector<PlannedMove> &records, media_move::MoveJournal *journal) {
   QStringList errors;
   for (auto it = records.rbegin(); it != records.rend(); ++it) {
     const QString destination = path::join(target, it->target);
@@ -241,8 +247,10 @@ void rollbackMovedFiles(const QString &source, const QString &target, const std:
       errors << QStringLiteral("Moved file changed; preserving %1").arg(destination);
       continue;
     }
-    QString error;
-    if (!renameNoClobber(destination, path::join(source, it->source), &error)) errors << QStringLiteral("Could not restore %1: %2").arg(it->source, error);
+    try {
+      if (!journal) fail(QStringLiteral("Missing move journal for rollback"));
+      journal->restoreFile({it->source, it->target, it->revision});
+    } catch (const Error &error) { errors << QStringLiteral("Could not restore %1: %2").arg(it->source, error.message()); }
   }
   if (!errors.isEmpty()) fail(errors.join(QStringLiteral("; ")));
 }
@@ -424,6 +432,8 @@ QJsonObject ImportResult::toJson() const {
 QJsonArray getAlbumsDetached(const QString &root) {
   if (!isDir(root)) fail(QStringLiteral("%1 is not a directory").arg(root));
   if (catalog::nestedInVault(root)) return {};
+  directory_move::recover(root);
+  auto inventoryTree = album_tree::read({root});
   const bool initialInventory = preload::setActiveRoot(root);
   const std::vector<AlbumDirEntry> entries = walkAlbumEntries(root);
   catalog::initialize(root);
@@ -540,6 +550,7 @@ void deleteAlbum(const QString &rootDir, const QString &albumId) {
   if (!valid || parts.isEmpty()) fail(QStringLiteral("A non-root album id is required"));
   const QString requested = path::join(rootDir, parts.join(kSeparator));
   const QString root = canonical(rootDir);
+  Directory library(root);
   QString target = root;
   for (const QString &part : parts) {
     target = path::join(target, part);
@@ -550,15 +561,19 @@ void deleteAlbum(const QString &rootDir, const QString &albumId) {
   target = canonical(target);
   if (target == root || !path::startsWith(target, root) || !isDir(target)) fail(QStringLiteral("Album path escapes the library or is not a directory"));
   const QString identity = directoryId(target);
+  const QString relativeParent = path::relative(path::parent(target), root);
+  Directory deletionParent = library.descend(relativeParent);
+  Directory admittedTarget = deletionParent.childForRemoval(path::fileName(target));
+  if (admittedTarget.identity() != identity) fail(QStringLiteral("Album changed during deletion admission"));
   // Stop queued work before waiting for current readers; otherwise workers can keep reacquiring shared leases for
   // hundreds of queued thumbnails.
   preload::dropPreloadForPath(requested);
   preload::dropPreloadForPath(target);
-  auto guard = prepareAlbumTreeRename(root, target);
+  auto guard = prepareAlbumTreeRename(root, target, &admittedTarget);
   if (directoryId(target) != identity) fail(QStringLiteral("Album changed while waiting for deletion"));
   preload::dropPreloadForPath(requested);
   preload::dropPreloadForPath(target);
-  removeTree(target);
+  deletionParent.removeEntry(path::fileName(target), admittedTarget.identity(), &admittedTarget);
 }
 
 static RenamedAlbumResult renamed(const QString &root, const QString &oldPath, const QString &newPath, const QString &parentDir, const QString &name) {
@@ -589,6 +604,7 @@ RenamedAlbumResult renameAlbum(const QString &rootDir, const QString &albumId, c
   } catch (const Error &e) {
     fail(QStringLiteral("Failed to resolve root: %1").arg(e.message()));
   }
+  FileAccess filesystem({root});
   const auto target = tryCanonical(path::join(root, albumId));
   if (!target) fail(QStringLiteral("Album not found"));
   if (*target == root) fail(QStringLiteral("Cannot rename or move the root directory"));
@@ -598,18 +614,28 @@ RenamedAlbumResult renameAlbum(const QString &rootDir, const QString &albumId, c
   if (path::fileName(*target) == safe) return renamed(root, *target, *target, parentDir, safe);
   const QString newPath = path::join(parentDir, safe);
   if (exists(newPath)) fail(QStringLiteral("Album \"%1\" already exists in %2").arg(safe, parentDir));
+  auto library = filesystem.directory(root), sourceParent = filesystem.directory(parentDir);
+  auto admitted = std::make_shared<Directory>(sourceParent->childForRemoval(path::fileName(*target)));
+  filesystem.bindDirectory(*target, admitted);
   {
-    auto moving = prepareAlbumTreeRename(root, *target);
-    QString error;
-    if (!renameNoClobber(*target, newPath, &error)) fail(error);
+    auto moving = prepareAlbumTreeRename(root, *target, admitted.get());
+    directory_move::move(root, *library, path::relative(*target, root), path::relative(newPath, root), *admitted);
   }
   preload::dropPreloadForPath(*target);
   if (cleanupDelay > 0) {
     const QString old = *target;
-    std::thread([old, newPath, cleanupDelay] {
+    const QString oldName = path::fileName(old);
+    const QString parentId = sourceParent->identity(), rootId = library->identity();
+    std::thread([old, newPath, oldName, parentDir, parentId, root, rootId, cleanupDelay] {
       std::this_thread::sleep_for(std::chrono::seconds(cleanupDelay));
       try {
-        if (old != newPath && exists(old) && listDir(old).isEmpty()) QDir().rmdir(old);
+        // Do not pin Windows parents against legitimate renames for the whole delay. Re-admit the same root/parent
+        // objects before effects; a moved/replaced parent simply makes this best-effort cleanup unnecessary.
+        Directory currentRoot(root);
+        if (currentRoot.identity() != rootId) return;
+        auto parent = currentRoot.descend(path::relative(parentDir, root));
+        if (parent.identity() != parentId) return;
+        if (old != newPath) if (auto candidate = parent.optionalChild(oldName, true); candidate && candidate->entries().empty()) parent.removeEmpty(oldName, &*candidate);
       } catch (const Error &) {
       }
     }).detach();
@@ -627,6 +653,7 @@ RenamedAlbumResult moveAlbum(const QString &rootDir, const QString &albumId, con
   } catch (const Error &e) {
     fail(QStringLiteral("Failed to resolve root: %1").arg(e.message()));
   }
+  FileAccess filesystem({root});
   const auto target = tryCanonical(path::join(root, albumId));
   if (!target) fail(QStringLiteral("Album not found"));
   if (*target == root) fail(QStringLiteral("Cannot rename or move the root directory"));
@@ -643,10 +670,12 @@ RenamedAlbumResult moveAlbum(const QString &rootDir, const QString &albumId, con
   const QString newPath = path::join(*parent, name);
   if (newPath == *target) return renamed(root, *target, *target, *parent, name);
   if (exists(newPath)) fail(QStringLiteral("Album \"%1\" already exists in %2").arg(name, *parent));
+  auto library = filesystem.directory(root), sourceParent = filesystem.directory(path::parent(*target));
+  auto admitted = std::make_shared<Directory>(sourceParent->childForRemoval(name));
+  filesystem.bindDirectory(*target, admitted);
   {
-    auto moving = prepareAlbumTreeRename(root, *target);
-    QString error;
-    if (!renameNoClobber(*target, newPath, &error)) fail(error);
+    auto moving = prepareAlbumTreeRename(root, *target, admitted.get());
+    directory_move::move(root, *library, path::relative(*target, root), path::relative(newPath, root), *admitted);
   }
   preload::dropPreloadForPath(*target);
   return renamed(root, *target, newPath, *parent, name);
@@ -664,10 +693,14 @@ quint64 getAlbumSize(const QString &dir) {
   return total;
 }
 
-QStringList moveMediaBatchWithHook(const QString &sourceRequested, const QString &targetRequested, const QStringList &media, bool moveArtifacts, const std::function<void(const QString &, const QString &, const QString &)> &checkpoint) {
+QStringList moveMediaBatchWithHook(const QString &sourceRequested, const QString &targetRequested, const QStringList &media, bool moveArtifacts, const std::function<void(const QString &, const QString &, const QString &)> &checkpoint, const std::vector<metadata::ObservedMedia> &expected) {
   const QString sourceDir = canonical(sourceRequested), targetDir = canonical(targetRequested);
+  FileAccess access({sourceDir, targetDir});
   if (!isDir(sourceDir) || !isDir(targetDir)) fail(QStringLiteral("bad dirs"));
   for (const QString &name : media) validateFileName(name);
+  if (vault::vaultRoot(sourceDir) != vault::vaultRoot(targetDir)) fail(QStringLiteral("Move media within the same library"));
+  vault::requireUnlocked(sourceDir);
+  vault::requireUnlocked(targetDir);
   if (sourceDir == targetDir) return {};
   auto tree = album_tree::read({sourceDir, targetDir});
   media_delete::recoverAlbum(sourceDir);
@@ -693,6 +726,7 @@ QStringList moveMediaBatchWithHook(const QString &sourceRequested, const QString
     moving = std::unique_lock(mediaMoveLock);
     store = std::unique_lock(storeWriteLock);
   }
+  if (!expected.empty()) metadata::validateMediaRevisions(expected);
   AlbumMeta snapshot = observed;
   if (metadataGuard) {
     metadata::readSelectedWithGuard(targetDir, media, false, *metadataGuard);
@@ -740,18 +774,18 @@ QStringList moveMediaBatchWithHook(const QString &sourceRequested, const QString
         const QString source = path::join(sourceDir, move.source), destination = path::join(targetDir, move.target);
         checkpoint(QStringLiteral("before_rename"), source, destination);
         if (metadata::sourceRevision(source) != move.revision) fail(QStringLiteral("Move source changed"));
-        QString error;
-        if (!renameNoClobber(source, destination, &error)) fail(error);
+        journal->moveFile({move.source, move.target, move.revision}, [&](const QString &phase) { checkpoint(phase, source, destination); });
         groupRecords.push_back(move);
         if (metadata::sourceRevision(destination) != move.revision) fail(QStringLiteral("Moved file changed"));
       }
     } catch (const Error &error) {
+      if (journal && journal->hasRetainedClaims()) throw;  // The retained entry and its original intent stay unsettled.
       try {
-        rollbackMovedFiles(sourceDir, targetDir, groupRecords);
+        rollbackMovedFiles(sourceDir, targetDir, groupRecords, journal.get());
       } catch (const Error &rollback) {
         QString previous = QStringLiteral("Ok(())");
         try {
-          rollbackMovedFiles(sourceDir, targetDir, movedRecords);
+          rollbackMovedFiles(sourceDir, targetDir, movedRecords, journal.get());
         } catch (const Error &e) {
           previous = QStringLiteral("Err(%1)").arg(json::string(e.message()));
         }
@@ -768,9 +802,21 @@ QStringList moveMediaBatchWithHook(const QString &sourceRequested, const QString
   }
   std::vector<std::pair<QString, QString>> moved;
   for (const PlannedMove &move : movedRecords) moved.emplace_back(move.source, move.target);
+  auto validateMoved = [&] {
+    for (const auto &move : movedRecords) {
+      const QString path = core::path::join(targetDir, move.target);
+      const auto named = access.directory(targetDir)->info(move.target);
+      const auto opened = access.pin(path);
+      if (!named.isFile || metadata::sourceRevisionFromInfo(named) != move.revision || !opened ||
+          named.dev != openedFileInfo(*opened).dev || named.ino != openedFileInfo(*opened).ino)
+        fail(QStringLiteral("Moved destination changed; preserving journal"));
+      access.releasePublished(path);
+    }
+  };
   if (metadataGuard) {
     try {
       checkpoint(QStringLiteral("before_metadata"), sourceDir, targetDir);
+      validateMoved();
       for (const PlannedMove &move : movedRecords)
         if (metadata::sourceRevision(path::join(targetDir, move.target)) != move.revision) fail(QStringLiteral("Moved file changed before metadata transfer"));
       if (!moved.empty()) {
@@ -780,7 +826,7 @@ QStringList moveMediaBatchWithHook(const QString &sourceRequested, const QString
     } catch (const Error &error) {
       if (journal) {
         try {
-          journal->rollback(&*metadataGuard);
+          journal->rollback(&*metadataGuard, [&](const QString &phase) { checkpoint(phase, sourceDir, targetDir); });
         } catch (const Error &rollback) {
           fail(QStringLiteral("%1; file rollback: %2").arg(error.message(), rollback.message()));
         }
@@ -789,6 +835,7 @@ QStringList moveMediaBatchWithHook(const QString &sourceRequested, const QString
     }
   }
   checkpoint(QStringLiteral("before_move_commit"), sourceDir, targetDir);
+  validateMoved();
   if (journal) journal->commit([&] { checkpoint(QStringLiteral("move_committed"), sourceDir, targetDir); });
   checkpoint(QStringLiteral("after_move_commit"), sourceDir, targetDir);
   if (journal) {

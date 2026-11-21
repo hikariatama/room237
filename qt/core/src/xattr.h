@@ -21,6 +21,7 @@ QStringList list(const QString &path);  // Names, for preserving attributes acro
 class OpenFile {
 public:
   explicit OpenFile(const QString &path);
+  explicit OpenFile(int descriptor);  // Duplicates an already admitted POSIX object.
   ~OpenFile();
   OpenFile(const OpenFile &) = delete;
   OpenFile &operator=(const OpenFile &) = delete;

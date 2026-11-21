@@ -2,6 +2,7 @@
 // Rebuildable library index. Sorting, filtering and inventory live on disk; a request returns at most one page,
 // never a whole album or favorites collection.
 #include "entry.h"
+#include "fs.h"
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -39,7 +40,7 @@ std::optional<QString> libraryRoot(const QString &album);
 void publish(const QString &album, const QString &name, const FileMetaEntry &entry);
 void forget(const QString &album, const QStringList &names);
 int scanAlbum(const QString &root, const QString &album);
-int scanAlbumIfNeeded(const QString &root, const QString &album, bool force);
+int scanAlbumIfNeeded(const QString &root, const QString &album, bool force, const Directory *pending = nullptr);
 void initialize(const QString &root);
 void retainAlbums(const QString &root, const QStringList &albumIds);
 void clear(const QString &root);

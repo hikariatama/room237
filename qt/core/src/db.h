@@ -1,6 +1,7 @@
 #pragma once
 // Thin RAII layer over the SQLite C API. Every failure throws core::Error with SQLite's message.
 #include "fs.h"
+#include "file_access.h"
 
 #include <QByteArray>
 #include <QString>
@@ -43,13 +44,16 @@ public:
 private:
   sqlite3 *db_ = nullptr;
   sqlite3_stmt *stmt_ = nullptr;
+  std::shared_ptr<FileAccess::State> access_;
+  std::shared_ptr<Directory> directory_;
 };
 
 enum class Open { ReadWrite, ReadOnly, Create };
+enum class TemporaryStorage { Default, Memory };
 
 class Connection {
 public:
-  Connection(const QString &path, Open mode = Open::Create);
+  Connection(const QString &path, Open mode = Open::Create, TemporaryStorage temporary = TemporaryStorage::Default);
   static Connection memory();
   ~Connection();
   Connection(Connection &&other) noexcept;
@@ -71,7 +75,10 @@ public:
 private:
   Connection() = default;
   sqlite3 *db_ = nullptr;
+  std::shared_ptr<FileAccess::State> access_;
   std::function<bool()> progress_;
+  std::shared_ptr<Directory> directory_;
+  std::shared_ptr<QFile> file_;
   std::vector<std::unique_ptr<std::function<Value(const std::vector<Value> &)>>> functions_;
 };
 

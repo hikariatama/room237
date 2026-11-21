@@ -1,4 +1,5 @@
 #include "media_delete.h"
+#include "file_access.h"
 
 #include "album_tree.h"
 #include "constants.h"
@@ -97,6 +98,7 @@ void cleanupDeletedArtifacts(const QString &album, const Journal &journal, const
 }
 
 void removeEmptyDir(const QString &p) {
+  if (auto *view = FileAccess::current(p)) return view->directory(path::parent(p))->removeEmpty(path::fileName(p));
 #ifndef Q_OS_WIN
   if (::rmdir(QFile::encodeName(p).constData()) != 0) fail(QString::fromLocal8Bit(strerror(errno)));
 #else
@@ -106,25 +108,56 @@ void removeEmptyDir(const QString &p) {
 
 void finishOrRollback(const QString &album, const QString &staging, const Journal &journal, const metadata::MetadataWriteGuard &guard, const std::function<void(const QString &)> &checkpoint) {
   validateJournal(journal);
+  auto *view = FileAccess::current(album);
+  auto source = view->directory(staging), destination = view->directory(album);
   QStringList errors;
   for (const Entry &entry : journal.files) {
     const QString staged = path::join(staging, entry.name), original = path::join(album, entry.name);
     const FileInfo info = lstat(staged);
-    if (!info.exists) {
+    const QString claimName = QStringLiteral("claimed-") + sha256Hex(entry.name.toUtf8());
+    auto claim = source->optionalChild(claimName, true);
+    const bool retained = claim && claim->info("entry").exists;
+    if (!info.exists && !retained) {
+      if (claim) source->removeEmpty(claimName, &*claim);
       // The file was never staged or has already been restored. A later external replacement belongs to its writer.
       if (!journal.committed && !lstat(original).exists) errors << QStringLiteral("Missing original during deletion recovery: %1: No such file or directory (os error 2)").arg(entry.name);
       continue;
     }
-    if (!(info.isFile || info.isSymlink) || ownedRevision(staged) != entry.revision) {
+    if (!retained && (!(info.isFile || info.isSymlink) || ownedRevision(staged) != entry.revision)) {
       errors << QStringLiteral("Staged media changed; preserving %1").arg(entry.name);
       continue;
     }
     try {
-      if (journal.committed) removeFile(staged);
-      else {
-        QString error;
-        if (!renameNoClobber(staged, original, &error)) fail(error);
+      if (retained && info.exists) fail(QStringLiteral("Deletion staging and retained claim both exist; preserving them"));
+      if (!claim) claim.emplace(source->privateChild(claimName));
+      claim->requirePrivate();
+      std::shared_ptr<QFile> opened;
+      if (!retained) {
+        if (info.isFile) opened = source->openRegular(entry.name, QIODevice::ReadOnly, true);
+        checkpoint(QStringLiteral("before_staged_claim"));
+        source->claim(entry.name, *claim, "entry", info, opened.get());
       }
+      auto expected = claim->info("entry");
+      if (!(expected.isFile || expected.isSymlink) || metadata::sourceRevisionFromInfo(expected) != entry.revision)
+        fail(QStringLiteral("Deletion claim changed; preserving it"));
+      if (!opened && expected.isFile) opened = claim->openRegular("entry", QIODevice::ReadOnly, true);
+      if (opened) {
+        const auto actual = openedFileInfo(*opened);
+        if (actual.dev != expected.dev || actual.ino != expected.ino || metadata::sourceRevisionFromInfo(actual) != entry.revision)
+          fail(QStringLiteral("Deletion claim changed before open; preserving it"));
+      }
+      checkpoint(journal.committed ? QStringLiteral("before_staged_unlink") : QStringLiteral("before_delete_rollback"));
+      if (journal.committed) claim->removeFileIfPresent("entry", &expected, opened.get());
+      else {
+        const auto named = claim->info("entry");
+        if (named.dev != expected.dev || named.ino != expected.ino || metadata::sourceRevisionFromInfo(named) != entry.revision)
+          fail(QStringLiteral("Deletion rollback entry changed; preserving it"));
+        QString error;
+        if (!claim->renameTo("entry", *destination, entry.name, false, &error, opened.get())) fail(error);
+        const auto restored = destination->info(entry.name);
+        if (restored.dev != expected.dev || restored.ino != expected.ino) fail(QStringLiteral("Deletion rollback destination changed; preserving journal"));
+      }
+      claim->sync(); destination->sync(); source->removeEmpty(claimName, &*claim);
     } catch (const Error &error) {
       errors << QStringLiteral("%1: %2").arg(entry.name, error.message());
     }
@@ -144,12 +177,14 @@ void finishOrRollback(const QString &album, const QString &staging, const Journa
     if (!name.startsWith(kPrefix)) fail(QStringLiteral("Invalid staging directory"));
     const QString quarantine = path::join(album, QStringLiteral(".room237-orphan-delete-") + name.mid(kPrefix.size()));
     QString error;
-    if (!renameNoClobber(staging, quarantine, &error)) fail(error);
+    if (!destination->renameTo(name, *destination, path::fileName(quarantine), false, &error, nullptr, source.get())) fail(error);
+    const auto moved = source->rebound(*destination, path::fileName(quarantine));
+    if (moved.identity() != source->identity()) fail(QStringLiteral("Deletion quarantine changed; preserving journal"));
     qWarning("Preserved unknown deletion staging files in %s", qUtf8Printable(quarantine));
     return syncDirectory(album);
   }
   removeFile(path::join(staging, kJournal));
-  removeEmptyDir(staging);
+  destination->removeEmpty(path::fileName(staging), source.get());
   syncDirectory(album);
 }
 
@@ -183,8 +218,12 @@ Journal parseJournal(const QByteArray &bytes, const QString &staging) {
 
 void recoverLocked(const QString &album, const metadata::MetadataWriteGuard &guard) {
   for (const QString &staging : stagingDirs(album)) {
+    auto *view = FileAccess::current(album);
+    auto admitted = std::make_shared<Directory>(view->directory(album)->childForRemoval(path::fileName(staging)));
+    view->bindDirectory(staging, admitted);
+    view->observeDirectory(staging);
     if (listDir(staging).isEmpty()) {
-      removeEmptyDir(staging);
+      view->directory(album)->removeEmpty(path::fileName(staging), admitted.get());
       syncDirectory(album);
       continue;
     }
@@ -233,6 +272,7 @@ std::unique_ptr<FileLock> lockMaintenance(const QString &album) {
 }
 
 void recoverAlbum(const QString &album) {
+  FileAccess access({canonical(album)});
   auto tree = album_tree::read({album});
   media_move::recoverAlbum(album);
   if (stagingDirs(album).isEmpty()) return;
@@ -277,6 +317,7 @@ DeleteBatchResult deleteBatchWithMode(const QString &requestedAlbum, const std::
   }
   if ((guarded && requireRetained && observed.empty()) || (!guarded && !observed.empty())) fail(QStringLiteral("Duplicate deletion needs retained observations and revisions"));
   const QString album = canonical(requestedAlbum);
+  FileAccess access({album});
   auto tree = album_tree::read({album});
   media_move::recoverAlbum(album);
   auto isSelected = [&](const QString &file) {
@@ -350,8 +391,10 @@ DeleteBatchResult deleteBatchWithMode(const QString &requestedAlbum, const std::
     for (const Entry &entry : journal.files) {
       const QString original = path::join(album, entry.name), target = path::join(staging, entry.name);
       if (ownedRevision(original) != entry.revision) fail(QStringLiteral("Media changed before deletion"));
-      QString error;
-      if (!renameNoClobber(original, target, &error)) fail(error);
+      auto source = access.directory(album), destination = access.directory(staging);
+      const FileInfo admitted = source->info(entry.name);
+      checkpoint(QStringLiteral("before_delete_claim"));
+      source->claim(entry.name, *destination, entry.name, admitted);
       if (ownedRevision(target) != entry.revision) fail(QStringLiteral("Media changed during deletion"));
       checkpoint(QStringLiteral("staged"));
     }

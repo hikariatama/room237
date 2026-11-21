@@ -4,6 +4,8 @@
 #include <QByteArray>
 #include <QString>
 #include <QStringList>
+#include <QFile>
+#include <functional>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -12,6 +14,7 @@
 #include <vector>
 
 namespace core {
+class FileAccess;
 
 struct Error : std::runtime_error {
   explicit Error(const QString &message) : std::runtime_error(message.toStdString()) {}
@@ -72,6 +75,55 @@ struct DirEntry {
   bool isFile = false, isDir = false, isSymlink = false;
 };
 std::vector<DirEntry> readDir(const QString &path);
+
+// A directory capability. Child lookups never follow links/reparse points. Keep this alive from admission through
+// the last effect; checking a pathname and opening it again does not provide the same guarantee.
+class Directory {
+public:
+  explicit Directory(const QString &absolutePath);
+  ~Directory();
+  Directory(Directory &&) noexcept;
+  Directory &operator=(Directory &&) noexcept;
+  Directory(const Directory &) = delete;
+  Directory &operator=(const Directory &) = delete;
+  Directory child(const QString &name) const;
+  Directory childForRemoval(const QString &name) const;
+  Directory ensureChild(const QString &name) const;
+  Directory privateChild(const QString &name) const;  // Exclusive, owner-only staging; never reuses an entry.
+  void requirePrivate() const;
+  Directory descend(const QString &relativePath) const;
+  QString identity() const;
+  FileInfo selfInfo() const;
+  Directory rebound(const Directory &parent, const QString &name) const;
+  std::optional<Directory> optionalChild(const QString &name, bool forRemoval = false) const;
+  std::vector<DirEntry> entries() const;
+  QByteArray readRegular(const QString &name) const;
+  std::optional<QByteArray> readOptionalRegular(const QString &name) const;
+  // The QFile owns the open object; its deleter also retains the admitted parent capability.
+  std::shared_ptr<QFile> openRegular(const QString &name, QIODevice::OpenMode mode = QIODevice::ReadOnly, bool mutation = false) const;
+  FileInfo info(const QString &name, bool followLeaf = false) const;
+  Directory share() const;
+  intptr_t nativeHandle() const;
+  void sync() const;
+  bool renameTo(const QString &name, const Directory &destination, const QString &target, bool replace,
+                QString *error = nullptr, QFile *openedSource = nullptr, const Directory *openedDirectory = nullptr) const;
+  // Caller durably journals the intent first. A substituted entry is moved, inspected, and preserved on mismatch.
+  // POSIX cannot rename/unlink by expected inode; private staging separates claim from later effects.
+  void claim(const QString &name, const Directory &staging, const QString &target, const FileInfo &expected,
+             QFile *openedSource = nullptr, const std::function<void()> &beforeRename = {}) const;
+  void writeAtomic(const QString &name, const QByteArray &bytes,
+                   const std::function<void(const QString &)> &beforePublication = {},
+                   const std::function<void(const QString &)> &beforePrivatePublication = {}) const;
+  bool removeFileIfPresent(const QString &name, const FileInfo *expected = nullptr, QFile *opened = nullptr) const;
+  void removeEntry(const QString &name, const QString &expectedDirectoryId = {}, const Directory *admitted = nullptr) const;
+  void removeEmpty(const QString &name, const Directory *admitted = nullptr) const;
+private:
+  friend class FileLock;
+  struct Impl;
+  void ensureCurrent() const;
+  explicit Directory(std::shared_ptr<Impl> impl);
+  std::shared_ptr<Impl> impl_;
+};
 void syncDir(const QString &path);
 void syncFile(const QString &path);
 
@@ -98,6 +150,10 @@ public:
   void release() { path_.clear(); }
 private:
   QString path_;
+  QString boundPath_, stagingPath_;
+  std::shared_ptr<QFile> file_;
+  std::shared_ptr<Directory> directory_;
+  FileAccess *access_ = nullptr;
 };
 
 class TempDir {
@@ -108,6 +164,8 @@ public:
   void release() { path_.clear(); }
 private:
   QString path_;
+  std::shared_ptr<Directory> directory_;
+  FileAccess *access_ = nullptr;
 };
 
 // Advisory lease on a file that stays in place. Closing the handle releases it, including on process death.
@@ -120,12 +178,14 @@ public:
   static std::unique_ptr<FileLock> tryAcquireShared(const QString &path);
   static std::unique_ptr<FileLock> acquire(const QString &path, std::chrono::milliseconds timeout, std::chrono::milliseconds poll);
   static std::unique_ptr<FileLock> acquireShared(const QString &path, std::chrono::milliseconds timeout, std::chrono::milliseconds poll);
+  static std::unique_ptr<FileLock> acquireIn(const Directory &directory, const QString &name, std::chrono::milliseconds timeout, std::chrono::milliseconds poll);
   bool ownsPath(const QString &path) const;
 private:
   FileLock() = default;
   static std::unique_ptr<FileLock> open(const QString &path);
   bool tryLock(bool shared);
   intptr_t handle_ = -1;
+  std::shared_ptr<void> directory_;
 };
 
 void validateFileName(const QString &name);

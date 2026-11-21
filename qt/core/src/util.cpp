@@ -1,4 +1,5 @@
 #include "util.h"
+#include "file_access.h"
 
 #include "settings.h"
 
@@ -7,7 +8,12 @@
 #include <QIODevice>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QScopeGuard>
 #include <thread>
+#ifndef Q_OS_WIN
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -91,73 +97,91 @@ QString ffmpegPath() {
   return found;
 }
 
-ProcessResult runProcess(const QString &program, const QStringList &arguments, int timeoutMs) {
+namespace {
+constexpr qint64 kDiagnosticBytes = 4 * 1024 * 1024;
+ProcessResult collectProcess(const QString &program, const QStringList &arguments, QIODevice *input, int timeoutMs,
+                             qint64 stdoutLimit, bool binaryOutput, int startTimeoutMs = 30000) {
+  if (stdoutLimit < 0) fail(QStringLiteral("Missing process output budget"));
   QProcess process;
 #ifdef Q_OS_WIN
   process.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *args) { args->flags |= CREATE_NO_WINDOW; });
+#else
+  const auto descriptors = FileAccess::inheritedDecoderDescriptors();
+  if (!descriptors.empty()) process.setChildProcessModifier([descriptors] {
+    // QProcess invokes this after fork and before exec. Only async-signal-safe fcntl calls are used here.
+    for (int fd : descriptors) if (fcntl(fd, F_SETFD, 0) < 0) _exit(127);
+  });
 #endif
+  QByteArray out, err;
+  bool overflow = false;
+  auto drain = [&](QProcess::ProcessChannel channel, QByteArray &bytes, qint64 limit, bool binary) {
+    process.setReadChannel(channel);
+    while (process.bytesAvailable()) {
+      const QByteArray chunk = process.read(65536);
+      if (chunk.isEmpty()) break;
+      const qint64 remaining = std::max<qint64>(0, limit - bytes.size());
+      if (binary && chunk.size() > remaining) {
+        overflow = true;
+        process.kill();
+      }
+      if (!overflow || !binary) bytes.append(chunk.constData(), qsizetype(std::min<qint64>(remaining, chunk.size())));
+    }
+  };
+  auto stdoutReady = [&] { drain(QProcess::StandardOutput, out, stdoutLimit, binaryOutput); };
+  auto stderrReady = [&] { drain(QProcess::StandardError, err, kDiagnosticBytes, false); };
+  // Direct slots also run inside waitForStarted/Finished/BytesWritten, without a GUI event loop. Never retain a
+  // whole readAll() result before slicing it. Diagnostics keep their existing first-4-MiB contract.
+  QObject::connect(&process, &QProcess::readyReadStandardOutput, &process, stdoutReady, Qt::DirectConnection);
+  QObject::connect(&process, &QProcess::readyReadStandardError, &process, stderrReady, Qt::DirectConnection);
+  auto disconnectReaders = qScopeGuard([&process] { process.disconnect(); });
   process.setProgram(program);
   process.setArguments(arguments);
-  process.setStandardInputFile(QProcess::nullDevice());
+  if (!input) process.setStandardInputFile(QProcess::nullDevice());
   process.start();
-  if (!process.waitForStarted(30000)) fail(process.errorString());
-  if (!process.waitForFinished(qMax(1, timeoutMs))) {
-    process.kill();
-    process.waitForFinished(5000);
-    fail(QStringLiteral("process timed out"));
-  }
-  ProcessResult result;
-  result.exitCode = process.exitCode();
-  result.success = process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
-  constexpr qsizetype limit = 4 * 1024 * 1024;
-  result.stdoutBytes = process.readAllStandardOutput().left(limit);
-  result.stderrBytes = process.readAllStandardError().left(limit);
-  return result;
-}
-
-ProcessResult runWithInput(const QString &program, const QStringList &arguments, QIODevice &input, int timeoutMs) {
-  QProcess process;
-#ifdef Q_OS_WIN
-  process.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *args) { args->flags |= CREATE_NO_WINDOW; });
-#endif
-  process.setProgram(program);
-  process.setArguments(arguments);
-  process.start();
-  if (!process.waitForStarted(30000)) fail(process.errorString());
+  if (!process.waitForStarted(qMax(1, startTimeoutMs))) fail(process.errorString());
   QElapsedTimer clock;
   clock.start();
-  QByteArray out, err;
-  for (;;) {
-    if (clock.elapsed() > timeoutMs) {
+  bool closed = !input;
+  while (process.state() != QProcess::NotRunning && !overflow) {
+    const qint64 remaining = qint64(qMax(1, timeoutMs)) - clock.elapsed();
+    if (remaining <= 0) {
       process.kill();
       process.waitForFinished(5000);
       fail(QStringLiteral("process timed out"));
     }
-    if (process.state() != QProcess::Running) break;
-    if (process.bytesToWrite() < (1 << 20) && !input.atEnd()) {
-      const QByteArray chunk = input.read(256 * 1024);
-      if (chunk.isEmpty()) process.closeWriteChannel();
-      else process.write(chunk);
-      if (input.atEnd()) process.closeWriteChannel();
+    if (input && !closed && process.bytesToWrite() < (1 << 20)) {
+      const QByteArray chunk = input->read(256 * 1024);
+      if (!chunk.isEmpty() && process.write(chunk) != chunk.size()) {
+        process.kill(); process.waitForFinished(5000); fail(QStringLiteral("Cannot write process input"));
+      }
+      if (chunk.isEmpty() || input->atEnd()) { process.closeWriteChannel(); closed = true; }
     }
-    process.waitForBytesWritten(50);
-    process.waitForReadyRead(10);
-    out += process.readAllStandardOutput();
-    err += process.readAllStandardError();
-    if (input.atEnd() && process.bytesToWrite() == 0) {
-      process.closeWriteChannel();
-      if (process.waitForFinished(50)) break;
-    }
+    process.waitForFinished(int(std::min<qint64>(remaining, input && !closed ? 10 : 50)));
+    stdoutReady();
+    stderrReady();
   }
-  process.waitForFinished(qMax(1, int(timeoutMs - clock.elapsed())));
-  out += process.readAllStandardOutput();
-  err += process.readAllStandardError();
+  if (overflow) { process.kill(); process.waitForFinished(5000); }
+  stdoutReady();
+  stderrReady();
+  if (overflow) fail(QStringLiteral("Process binary output exceeds its consumer budget"));
   ProcessResult result;
   result.exitCode = process.exitCode();
   result.success = process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
-  result.stdoutBytes = out;
-  result.stderrBytes = err.left(4 * 1024 * 1024);
+  result.stdoutBytes = std::move(out);
+  result.stderrBytes = std::move(err);
   return result;
+}
+}  // namespace
+
+ProcessResult runProcess(const QString &program, const QStringList &arguments, int timeoutMs) {
+  return collectProcess(program, arguments, nullptr, timeoutMs, kDiagnosticBytes, false);
+}
+ProcessResult runBinaryProcess(const QString &program, const QStringList &arguments, int timeoutMs,
+                               qint64 stdoutLimit, QIODevice *input, int startTimeoutMs) {
+  return collectProcess(program, arguments, input, timeoutMs, stdoutLimit, true, startTimeoutMs);
+}
+ProcessResult runWithInput(const QString &program, const QStringList &arguments, QIODevice &input, int timeoutMs, qint64 stdoutLimit) {
+  return runBinaryProcess(program, arguments, timeoutMs, stdoutLimit, &input);
 }
 
 ProcessResult runChecked(const QString &program, const QStringList &arguments, int timeoutMs) {

@@ -17,8 +17,10 @@
 
 #include <QCryptographicHash>
 #include <QDateTime>
+#include <QDir>
 #include <QJsonDocument>
 #include <QSet>
+#include <QRegularExpression>
 #include <atomic>
 #include <map>
 #include <mutex>
@@ -48,23 +50,24 @@ QString lastComponent(const QString &id) { return id.section(QLatin1Char('/'), -
 std::mutex memoryMutex;
 std::map<QString, std::unique_ptr<db::Connection>> memoryKeepers;
 
-QString databaseFor(const QString &root, const QString &dir) {
+struct Database { QString path; bool memory; };
+Database databaseFor(const QString &root, const QString &dir) {
   if (nestedInVault(root)) {
     // An empty index that is never scanned: the folder shows nothing.
     const QString uri = QStringLiteral("file:room237-nested-%1?mode=memory&cache=shared").arg(sha256Hex(root.toUtf8()).left(16));
     std::lock_guard lock(memoryMutex);
     auto &keeper = memoryKeepers[root];
-    if (!keeper) keeper = std::make_unique<db::Connection>(uri);
-    return uri;
+    if (!keeper) keeper = std::make_unique<db::Connection>(uri, db::Open::Create, db::TemporaryStorage::Memory);
+    return {uri, true};
   }
-  if (!lstat(path::join(root, vault::kVaultFile)).isFile) return path::join(dir, QStringLiteral("index.sqlite"));
+  if (!lstat(path::join(root, vault::kVaultFile)).isFile) return {path::join(dir, QStringLiteral("index.sqlite")), false};
   const auto keys = vault::keysFor(root);
   if (!keys) fail(QStringLiteral("This library is locked"));
   const QString uri = QStringLiteral("file:room237-vault-%1?mode=memory&cache=shared").arg(keys->id);
   std::lock_guard lock(memoryMutex);
   auto &keeper = memoryKeepers[root];
-  if (!keeper) keeper = std::make_unique<db::Connection>(uri);
-  return uri;
+  if (!keeper) keeper = std::make_unique<db::Connection>(uri, db::Open::Create, db::TemporaryStorage::Memory);
+  return {uri, true};
 }
 
 db::Connection open(const QString &root) {
@@ -73,16 +76,18 @@ db::Connection open(const QString &root) {
   if (!path::isAbsolute(root) || !isDir(root)) fail(QStringLiteral("Library root is not a directory: %1").arg(root));
   const QString dir = path::join(root, kDirectory);
   if (!exists(dir) && !nestedInVault(root)) createDir(dir);
-  db::Connection conn(databaseFor(root, dir));
+  const Database database = databaseFor(root, dir);
+  db::Connection conn(database.path, db::Open::Create, database.memory ? db::TemporaryStorage::Memory : db::TemporaryStorage::Default);
   conn.busyTimeout(30000);
   conn.executeBatch(QStringLiteral(
-      "PRAGMA cache_size=-2048; PRAGMA temp_store=FILE; PRAGMA temp.cache_size=-2048; PRAGMA mmap_size=0;"
+      "PRAGMA cache_size=-2048; PRAGMA temp.cache_size=-2048; PRAGMA mmap_size=0;"
       "CREATE TABLE IF NOT EXISTS media (album TEXT NOT NULL, name TEXT NOT NULL, meta TEXT NOT NULL, favorite INTEGER NOT NULL, added INTEGER NOT NULL, shoot INTEGER NOT NULL, blur_preview TEXT, seen INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(album,name));"
       "CREATE INDEX IF NOT EXISTS media_name ON media(album,name COLLATE NOCASE,name);"
       "CREATE INDEX IF NOT EXISTS media_added ON media(album,added,name);"
       "CREATE INDEX IF NOT EXISTS media_shoot ON media(album,shoot,name);"
       "CREATE INDEX IF NOT EXISTS media_favorites ON media(favorite,album,name);"
       "CREATE TABLE IF NOT EXISTS scanned (album TEXT PRIMARY KEY, generation INTEGER NOT NULL,signature TEXT NOT NULL DEFAULT '');"));
+  if (!database.memory) conn.executeBatch(QStringLiteral("PRAGMA temp_store=FILE"));
   auto hasColumn = [&](const char *sql) {
     try {
       conn.prepare(QString::fromLatin1(sql));
@@ -125,6 +130,15 @@ db::Connection open(const QString &root) {
 
 QString pendingMarker(const QString &root, const QString &id) { return path::join(path::join(path::join(root, kDirectory), QStringLiteral("pending")), sha256Hex(id.toUtf8())); }
 
+void removePending(const QString &root, const QString &id, const Directory *admitted = nullptr) {
+  if (admitted) { admitted->removeFileIfPresent(sha256Hex(id.toUtf8())); return; }
+  Directory library(canonical(root));
+  auto catalog = library.optionalChild(kDirectory);
+  if (!catalog) return;
+  auto pending = catalog->optionalChild(QStringLiteral("pending"));
+  if (pending) pending->removeFileIfPresent(sha256Hex(id.toUtf8()));
+}
+
 void put(db::Connection &conn, const QString &album, const QString &name, const QString &path, const FileMetaEntry &entry, std::optional<qint64> seen) {
   QString albumDir = path::parent(path);
   if (albumDir.isEmpty()) albumDir = path;
@@ -157,25 +171,31 @@ void put(db::Connection &conn, const QString &album, const QString &name, const 
 // Metadata is authoritative. A failed derived-index write is retried from disk before the next page or favorite-count
 // request, including after a restart.
 void repairPending(const QString &root) {
-  const QString pending = path::join(path::join(root, kDirectory), QStringLiteral("pending"));
-  if (!isDir(pending)) return;
-  for (const DirEntry &file : readDir(pending)) {
-    const QString marker = path::join(pending, file.name);
-    QString id;
-    try {
-      id = QString::fromUtf8(readAll(marker));
-    } catch (const Error &) {
-      if (!entryExists(marker)) continue;
-      throw;
-    }
+  Directory library(canonical(root));
+  auto catalog = library.optionalChild(kDirectory);
+  if (!catalog) return;
+  auto pending = catalog->optionalChild(QStringLiteral("pending"));
+  if (!pending) return;
+  static const QRegularExpression digest(QStringLiteral("^[0-9a-f]{64}$"));
+  for (const DirEntry &file : pending->entries()) {
+    if (!file.isFile || !digest.match(file.name).hasMatch()) continue;
+    const auto bytes = pending->readOptionalRegular(file.name);
+    if (!bytes) continue;  // Another successful repair may have consumed the marker.
+    const QString id = QString::fromUtf8(*bytes);
+    if (id.toUtf8() != *bytes || sha256Hex(*bytes) != file.name) continue;
+    bool valid = !path::isAbsolute(id) && !id.contains(QChar(0));
+    if (!id.isEmpty())
+      for (const QString &part : QDir::fromNativeSeparators(id).split(QLatin1Char('/')))
+        if (part.isEmpty() || part == QLatin1String(".") || part == QLatin1String("..") || part.startsWith(QLatin1String(".room237-"))) valid = false;
+    if (!valid) continue;
     const QString album = path::join(root, id);
     if (isDir(album)) {
       if (!path::startsWith(canonical(album), canonical(root))) fail(QStringLiteral("Pending album outside library"));
-      scanAlbum(root, album);
+      scanAlbumIfNeeded(root, album, true, &*pending);
     } else {
       db::Connection conn = open(root);
       conn.execute(QStringLiteral("DELETE FROM media WHERE album=?1"), {id});
-      removeFileIfExists(marker);
+      pending->removeFileIfPresent(file.name);
     }
   }
 }
@@ -314,9 +334,9 @@ void publish(const QString &album, const QString &name, const FileMetaEntry &ent
     qWarning("Catalog update failed for %s: %s", qUtf8Printable(album), qUtf8Printable(error.message()));
     try {
       const QString id = albumId(*root, album);
-      const QString marker = pendingMarker(*root, id);
-      createDirs(path::parent(marker));
-      writeAll(marker, id.toUtf8());
+      Directory library(canonical(*root));
+      Directory pending = library.child(kDirectory).ensureChild(QStringLiteral("pending"));
+      pending.writeAtomic(sha256Hex(id.toUtf8()), id.toUtf8());
     } catch (const Error &retry) {
       qWarning("Cannot record pending catalog repair: %s", qUtf8Printable(retry.message()));
     }
@@ -400,7 +420,7 @@ bool reconcileAlbum(const QString &rootDir, const QString &id) {
 
 int scanAlbum(const QString &root, const QString &album) { return scanAlbumIfNeeded(root, album, true); }
 
-int scanAlbumIfNeeded(const QString &root, const QString &album, bool force) {
+int scanAlbumIfNeeded(const QString &root, const QString &album, bool force, const Directory *pending) {
   if (nestedInVault(root)) return 0;
   auto tree = album_tree::read({album});
   auto inventory = FileLock::acquire(path::join(album, QStringLiteral(".room237-inventory.lock")), std::chrono::seconds(1800), std::chrono::milliseconds(20));
@@ -447,7 +467,7 @@ int scanAlbumIfNeeded(const QString &root, const QString &album, bool force) {
     conn.execute(QStringLiteral("INSERT INTO scanned(album,generation,signature) VALUES(?1,?2,?3) ON CONFLICT(album) DO UPDATE SET generation=excluded.generation,signature=excluded.signature"), {id, generation, signature()});
     tx.commit();
   }
-  removeFileIfExists(pendingMarker(root, id));
+  removePending(root, id, pending);
   return count;
 }
 

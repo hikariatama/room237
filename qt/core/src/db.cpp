@@ -1,4 +1,5 @@
 #include "db.h"
+#include "sqlite_access.h"
 
 #include <sqlite3.h>
 
@@ -22,15 +23,20 @@ Value fromSqlite(sqlite3_value *value) {
 }
 }  // namespace
 
-Statement::Statement(sqlite3 *db, const QString &sql) : db_(db) {
+Statement::Statement(sqlite3 *db, const QString &sql) : db_(db), access_(FileAccess::capture()) {
+  FileAccess access(access_);
+  if (const char *name = sqlite3_db_filename(db_, "main"); name && *name)
+    if (auto *view = FileAccess::current(QString::fromUtf8(name))) directory_ = view->directory(path::parent(QString::fromUtf8(name)));
   const QByteArray text = sql.toUtf8();
   check(db_, sqlite3_prepare_v2(db_, text.constData(), int(text.size()), &stmt_, nullptr));
 }
 Statement::~Statement() {
+  FileAccess access(access_);
   if (stmt_) sqlite3_finalize(stmt_);
 }
-Statement::Statement(Statement &&other) noexcept : db_(other.db_), stmt_(other.stmt_) { other.stmt_ = nullptr; }
+Statement::Statement(Statement &&other) noexcept : db_(other.db_), stmt_(other.stmt_), access_(std::move(other.access_)), directory_(std::move(other.directory_)) { other.stmt_ = nullptr; }
 Statement &Statement::bind(int index, const Value &value) {
+  FileAccess access(access_);
   int code = SQLITE_OK;
   if (std::holds_alternative<std::monostate>(value)) code = sqlite3_bind_null(stmt_, index);
   else if (auto *i = std::get_if<qint64>(&value)) code = sqlite3_bind_int64(stmt_, index, *i);
@@ -45,12 +51,14 @@ Statement &Statement::bind(int index, const Value &value) {
   return *this;
 }
 bool Statement::step() {
+  FileAccess access(access_);
   const int code = sqlite3_step(stmt_);
   if (code == SQLITE_ROW) return true;
   if (code == SQLITE_DONE) return false;
   raise(db_, code);
 }
 void Statement::reset() {
+  FileAccess access(access_);
   sqlite3_reset(stmt_);
   sqlite3_clear_bindings(stmt_);
 }
@@ -88,7 +96,19 @@ std::optional<qint64> Statement::optionalInteger(int column) const {
   return integer(column);
 }
 
-Connection::Connection(const QString &path, Open mode) {
+Connection::Connection(const QString &path, Open mode, TemporaryStorage temporary) : access_(FileAccess::capture()) {
+  initializeFilesystemBridge();
+  FileAccess access(access_);
+  if (auto *view = FileAccess::current(path)) {
+    directory_ = view->directory(core::path::parent(path));
+    view->observeDirectory(core::path::parent(path));
+#ifdef Q_OS_WIN
+    // SQLite's win32 VFS reopens a pathname. Hold the base file and every parent against replacement for its full
+    // connection lifetime, including CREATE: create a regular non-link leaf first, without truncating it.
+    file_ = directory_->openRegular(core::path::fileName(path), mode == Open::ReadOnly ? QIODevice::ReadOnly :
+        QIODevice::ReadWrite | (mode == Open::Create ? QIODevice::OpenMode{} : QIODevice::ExistingOnly));
+#endif
+  }
   int flags = SQLITE_OPEN_FULLMUTEX;
   switch (mode) {
   case Open::ReadWrite: flags |= SQLITE_OPEN_READWRITE; break;
@@ -103,17 +123,26 @@ Connection::Connection(const QString &path, Open mode) {
     fail(message);
   }
   sqlite3_extended_result_codes(db_, 0);
+  if (temporary == TemporaryStorage::Memory) {
+    try {
+      if (sqlite3_compileoption_used("TEMP_STORE=0")) fail(QStringLiteral("SQLite was built with file-only temporary storage"));
+      executeBatch(QStringLiteral("PRAGMA temp_store=MEMORY"));
+      if (pragmaInteger(QStringLiteral("temp_store")) != 2) fail(QStringLiteral("SQLite cannot provide memory-only temporary storage"));
+    } catch (...) { sqlite3_close(db_); db_ = nullptr; throw; }
+  }
 }
 Connection Connection::memory() { return Connection(QStringLiteral(":memory:")); }
 Connection::~Connection() { close(); }
-Connection::Connection(Connection &&other) noexcept : db_(other.db_), progress_(std::move(other.progress_)), functions_(std::move(other.functions_)) { other.db_ = nullptr; }
+Connection::Connection(Connection &&other) noexcept : db_(other.db_), access_(std::move(other.access_)), progress_(std::move(other.progress_)), directory_(std::move(other.directory_)), file_(std::move(other.file_)), functions_(std::move(other.functions_)) { other.db_ = nullptr; }
 void Connection::close() {
+  FileAccess access(access_);
   if (!db_) return;
   const int code = sqlite3_close(db_);
   if (code != SQLITE_OK) sqlite3_close_v2(db_);
   db_ = nullptr;
 }
 void Connection::executeBatch(const QString &sql) {
+  FileAccess access(access_);
   char *message = nullptr;
   const int code = sqlite3_exec(db_, sql.toUtf8().constData(), nullptr, nullptr, &message);
   if (code != SQLITE_OK) {
@@ -123,13 +152,15 @@ void Connection::executeBatch(const QString &sql) {
   }
 }
 int Connection::execute(const QString &sql, std::initializer_list<Value> params) {
+  FileAccess access(access_);
   Statement statement(db_, sql);
   int index = 1;
   for (const Value &value : params) statement.bind(index++, value);
   return statement.execute();
 }
-Statement Connection::prepare(const QString &sql) { return Statement(db_, sql); }
+Statement Connection::prepare(const QString &sql) { FileAccess access(access_); return Statement(db_, sql); }
 qint64 Connection::pragmaInteger(const QString &name) {
+  FileAccess access(access_);
   Statement statement(db_, QStringLiteral("PRAGMA %1").arg(name));
   if (!statement.step()) fail(QStringLiteral("Query returned no rows"));
   return statement.integer(0);

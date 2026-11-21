@@ -73,7 +73,6 @@ db::Connection connect(const QString &path, bool writable) {
           "CREATE TABLE ignored_pairs(a TEXT NOT NULL,b TEXT NOT NULL,PRIMARY KEY(a,b));"
           "CREATE INDEX ignored_pairs_b ON ignored_pairs(b);"
           "INSERT OR IGNORE INTO ignored_pairs SELECT json_extract(value,'$[0]'),json_extract(value,'$[1]') FROM album,json_each(album.ignores);"
-          "CREATE INDEX IF NOT EXISTS files_heic_output ON files(json_extract(data,'$.heic_conversion.output_name'));"
           "UPDATE album SET ignores='[]'; PRAGMA user_version=2;"));
     } else if (now != 2) {
       fail(QStringLiteral("Unsupported album database version: %1").arg(now));
@@ -110,10 +109,10 @@ static void initializeWith(const QString &path, const std::function<void(db::Con
         "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;"
         "CREATE TABLE files (name TEXT PRIMARY KEY NOT NULL, data TEXT NOT NULL);"
         "CREATE TABLE album (id INTEGER PRIMARY KEY CHECK(id=1), ignores TEXT NOT NULL);"
-        "CREATE INDEX files_heic_output ON files(json_extract(data,'$.heic_conversion.output_name'));"
         "CREATE TABLE ignored_pairs(a TEXT NOT NULL,b TEXT NOT NULL,PRIMARY KEY(a,b));"
         "CREATE INDEX ignored_pairs_b ON ignored_pairs(b);"
         "PRAGMA user_version=2;"));
+    if (!codec().vault) conn.executeBatch(QStringLiteral("CREATE INDEX files_heic_output ON files(json_extract(data,'$.heic_conversion.output_name'))"));
     db::Transaction tx(conn);
     conn.execute(QStringLiteral("INSERT INTO album VALUES(1,'[]')"));
     populate(conn);

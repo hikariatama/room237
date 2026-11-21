@@ -19,7 +19,6 @@ struct UiState {
   double sidebarFraction = 0.2;  // Default 20% of the width, 16% to 24%.
   QString sortKey = QStringLiteral("name"), sortDir = QStringLiteral("asc"), rootDir, decoyRoot, language = QStringLiteral("en"), layout = QStringLiteral("default");
   bool contentProtected = false, scroll60 = false, autoUpdate = true;
-  QStringList hardeningNeverAsk;  // Plain roots for which encryption is not offered.
 };
 class MainWindow : public QMainWindow {
   Q_OBJECT
@@ -41,7 +40,8 @@ public:
   int hashDone() const { return hashDone_; }
   int hashTotal() const { return hashTotal_; }
   qint64 processed() const { return processed_; }
-  bool openRoot(const QString &root);
+  // album: reopened when the root still has it, instead of the first one.
+  bool openRoot(const QString &root, QString album = {});
   void activateAlbum(const QString &id, std::function<void()> done = {});
   void openViewer(int index);
   void stepViewer(int delta);
@@ -142,6 +142,8 @@ private:
   void removeEncryption();
   void replaceFactor();
   void onVaultProgress(const QJsonObject &progress);
+  // The open root is left or locked: its pass reports no more, so its screen and toasts stop waiting for it.
+  void dropVaultPass();
   void setProcessing(bool processing);
   // Decrypted copies of `items` for another app, after the user agreed in this unlock.
   void confirmExport(std::function<void()> proceed);
@@ -199,6 +201,10 @@ private:
   QString vaultRoot_;  // The open root when it is encrypted and unlocked.
   QSet<QString> offeredRoots_;
   QTimer vaultRefresh_;
+  bool vaultPass_ = false;  // Files of the open root are being encrypted or decrypted.
+  int vaultToast_ = 0;      // The toast of encrypting or decrypting the whole root, until the pass ends.
+  // Toasts of imports into the open encrypted root that wait for the pass encrypting their files: id and final text.
+  QList<std::pair<int, QString>> sealToasts_;
   bool hardening_ = false, exportAllowed_ = false;
   PreloadOverlay *preload_;
   QLabel *dragHint_;

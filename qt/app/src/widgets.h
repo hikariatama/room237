@@ -230,7 +230,10 @@ public:
   void animateClose();
   bool isOpen() const { return open_; }
   void setModalDim(bool dim) { dim_ = dim; }
+  // The panel stays in the middle of the host when its size changes (a dialog that grows an error or a page).
+  void setCentered(bool centered) { centered_ = centered; }
   void setDismissOnOutside(bool on) { dismissOnOutside_ = on; }
+  void setDismissOnEscape(bool on) { dismissOnEscape_ = on; }
   static void closeAll(QWidget *host);
   void setPanelSize(const QSize &size);
   QRect panelRect() const { return panel_; }
@@ -256,7 +259,7 @@ private:
   Qt::Edge side_ = Qt::BottomEdge;
   Qt::Alignment align_ = Qt::AlignRight;
   Surface surface_;
-  bool open_ = false, dim_ = false, dismissOnOutside_ = true, closing_ = false;
+  bool open_ = false, dim_ = false, dismissOnOutside_ = true, dismissOnEscape_ = true, closing_ = false, centered_ = false;
   QVariantAnimation fade_;
   qreal progress_ = 1;
   QPixmap frame_, frost_;
@@ -305,12 +308,15 @@ public:
   enum Kind { Success, Error, Info, Loading };
   explicit ToastHost(QWidget *window);
   int show(Kind kind, const QString &text, int durationMs = 3200);
-  void update(int id, Kind kind, const QString &text, int durationMs = 3200);
+  // Returns the toast's id: a new one when the old toast is gone.
+  int update(int id, Kind kind, const QString &text, int durationMs = 3200);
   void dismiss(int id);
   // A persistent toast with a progress bar and an action, used by the updater.
   int custom(const QString &text, const QByteArray &icon, const QString &action, std::function<void()> onAction);
   void setProgress(int id, double fraction);
   void setAction(int id, const QString &action, std::function<void()> onAction);
+  // Replaces the kind's own icon, keeping its colour (a lock for files that end up encrypted).
+  void setIcon(int id, const QByteArray &icon);
   void setHiddenForPrivacy(bool hidden);
   void hostResized() { if (!toasts_.isEmpty()) relayout(); }
   int visibleCount() const { return toasts_.size(); }
@@ -332,13 +338,15 @@ private:
     QTimer *timer = nullptr;
     bool leaving = false;
     QRect actionRect;
+    qreal slotFrom = 0, slot = 0;  // Places in the stack counted from the bottom: where the toast moves from and to.
   };
   void relayout();
+  qreal slotOf(const Toast &toast) const { return toast.slotFrom + (toast.slot - toast.slotFrom) * shift_.currentValue().toReal(); }
   void remove(int id);
   Toast *find(int id);
   QVector<Toast> toasts_;
   int nextId_ = 1;
-  QVariantAnimation spin_;
+  QVariantAnimation spin_, shift_;
   bool privacy_ = false;
 };
 // Arrows and month/year selects, Sunday-first day buttons, hour and minute inputs.

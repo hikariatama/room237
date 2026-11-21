@@ -9,6 +9,7 @@
 #include "platform.h"
 #include "secure_media.h"
 #include "qatrace.h"
+#include "util.h"
 #include <QColorSpace>
 #include <QFileInfo>
 #include <QProcess>
@@ -55,33 +56,19 @@ QImage decodeThumbnail(const QString &path, int size, int height) {
 // `input` is the plaintext of an encrypted file, given to FFmpeg through its standard input.
 static QImage decodeThroughFfmpeg(const QString &path, const QByteArray *input = nullptr) {
   if (gFfmpeg.isEmpty()) return {};
-  QProcess process;
-  process.setProcessChannelMode(QProcess::SeparateChannels);
-  process.start(gFfmpeg, {QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("error"), QStringLiteral("-nostdin"), QStringLiteral("-i"), input ? QStringLiteral("pipe:0") : path, QStringLiteral("-frames:v"), QStringLiteral("1"), QStringLiteral("-c:v"), QStringLiteral("png"), QStringLiteral("-pix_fmt"), QStringLiteral("rgba"), QStringLiteral("-f"), QStringLiteral("image2pipe"), QStringLiteral("-")});
-  if (!process.waitForStarted(5000)) return {};
-  if (input) {
-    for (qsizetype offset = 0; offset < input->size() && process.state() == QProcess::Running;) {
-      const qint64 written = process.write(input->constData() + offset, qMin<qsizetype>(1 << 20, input->size() - offset));
-      if (written <= 0) break;
-      offset += written;
-      process.waitForBytesWritten(30000);
-    }
-  }
-  process.closeWriteChannel();
   QByteArray bytes;
-  QElapsedTimer clock;
-  clock.start();
-  while (process.state() != QProcess::NotRunning && clock.elapsed() < 30000) {
-    process.waitForReadyRead(200);
-    bytes += process.readAllStandardOutput();
-    if (bytes.size() > (1LL << 30)) break;
-  }
-  bytes += process.readAllStandardOutput();
-  if (process.state() != QProcess::NotRunning) {
-    process.kill();
-    process.waitForFinished(1000);
-    return {};
-  }
+  QBuffer source;
+  if (input) { source.setData(*input); source.open(QIODevice::ReadOnly); }
+  try {
+    const auto result = core::runBinaryProcess(gFfmpeg,
+        {QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("error"), QStringLiteral("-nostdin"),
+         QStringLiteral("-i"), input ? QStringLiteral("pipe:0") : path, QStringLiteral("-frames:v"), QStringLiteral("1"),
+         QStringLiteral("-c:v"), QStringLiteral("png"), QStringLiteral("-pix_fmt"), QStringLiteral("rgba"),
+         QStringLiteral("-f"), QStringLiteral("image2pipe"), QStringLiteral("-")},
+        30000, qint64(1) << 30, input ? &source : nullptr, 5000);
+    // Preserve this consumer's existing 1-GiB PNG budget, independently of diagnostic retention.
+    bytes = result.stdoutBytes;
+  } catch (const core::Error &) { return {}; }
   QImage image;
   image.loadFromData(bytes, "PNG");
   return image;

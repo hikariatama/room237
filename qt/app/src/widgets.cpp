@@ -584,6 +584,7 @@ void Popover::place() {
   if (side_ == Qt::LeftEdge && r.left() < bounds.left()) r.moveLeft(anchor_.right() + gap);
   if (side_ == Qt::BottomEdge && r.bottom() > bounds.bottom() && anchor_.top() - gap - r.height() >= bounds.top()) r.moveBottom(anchor_.top() - gap);
   if (side_ == Qt::TopEdge && r.top() < bounds.top() && anchor_.bottom() + gap + r.height() <= bounds.bottom()) r.moveTop(anchor_.bottom() + gap);
+  if (centered_) r.moveTopLeft(QPoint((host->width() - r.width()) / 2, (host->height() - r.height()) / 2));
   r.moveLeft(qBound(bounds.left(), r.left(), qMax(bounds.left(), bounds.right() - r.width())));
   r.moveTop(qBound(bounds.top(), r.top(), qMax(bounds.top(), bounds.bottom() - r.height())));
   panel_ = r;
@@ -722,7 +723,7 @@ bool Popover::eventFilter(QObject *object, QEvent *event) {
     if (key->key() == Qt::Key_Escape) {
       for (Popover *other : parentWidget()->findChildren<Popover *>(Qt::FindDirectChildrenOnly))
         if (other != this && other->isOpen() && other->parentPopover_ == this) return false;
-      animateClose();
+      if (dismissOnEscape_) animateClose();
       return true;
     }
   }
@@ -1006,6 +1007,15 @@ ToastHost::ToastHost(QWidget *window) : QWidget(window) {
   spin_.setDuration(1000);
   spin_.setLoopCount(-1);
   connect(&spin_, &QVariantAnimation::valueChanged, this, [this] { QWidget::update(); });
+  // The others close up or make room instead of jumping when a toast comes or goes.
+  shift_.setStartValue(0.0);
+  shift_.setEndValue(1.0);
+  shift_.setEasingCurve(Theme::bezier(0.22, 1, 0.36, 1));
+  connect(&shift_, &QVariantAnimation::valueChanged, this, [this] { QWidget::update(); });
+  connect(&shift_, &QVariantAnimation::finished, this, [this] {
+    for (Toast &toast : toasts_) toast.slotFrom = toast.slot;
+    relayout();
+  });
 }
 ToastHost::Toast *ToastHost::find(int id) {
   for (Toast &toast : toasts_)
@@ -1043,17 +1053,15 @@ int ToastHost::show(Kind kind, const QString &text, int durationMs) {
   QAccessible::updateAccessibility(&announce);
   return id;
 }
-void ToastHost::update(int id, Kind kind, const QString &text, int durationMs) {
+int ToastHost::update(int id, Kind kind, const QString &text, int durationMs) {
   Toast *toast = find(id);
-  if (!toast) {
-    show(kind, text, durationMs);
-    return;
-  }
+  if (!toast || toast->leaving) return show(kind, text, durationMs);
   toast->kind = kind;
   toast->text = text;
   toast->timer->stop();
   if (durationMs > 0 && kind != Loading) toast->timer->start(durationMs);
   relayout();
+  return id;
 }
 void ToastHost::dismiss(int id) {
   Toast *toast = find(id);
@@ -1099,6 +1107,12 @@ void ToastHost::setAction(int id, const QString &action, std::function<void()> o
     relayout();
   }
 }
+void ToastHost::setIcon(int id, const QByteArray &icon) {
+  if (Toast *toast = find(id)) {
+    toast->icon = icon;
+    QWidget::update();
+  }
+}
 void ToastHost::setHiddenForPrivacy(bool hidden) {
   privacy_ = hidden;
   relayout();
@@ -1117,8 +1131,33 @@ void ToastHost::relayout() {
     hide();
     return;
   }
+  // Only an action takes clicks; elsewhere the gallery under the toasts stays reachable.
+  bool actions = false;
+  for (const Toast &toast : toasts_) actions |= bool(toast.action);
+  setAttribute(Qt::WA_TransparentForMouseEvents, !actions);
+  // New places in the stack; toasts already there slide from where they are now.
+  const int count = int(toasts_.size());
+  bool moving = false;
+  qreal highest = 0;
+  for (int i = 0; i < count; i++) {
+    Toast &toast = toasts_[i];
+    const qreal now = toast.appear > 0 || toast.leaving ? slotOf(toast) : count - 1 - i;
+    toast.slotFrom = now;
+    toast.slot = count - 1 - i;
+    moving |= !qFuzzyCompare(toast.slotFrom + 1, toast.slot + 1);
+    highest = qMax(highest, qMax(toast.slotFrom, toast.slot));
+  }
+  if (moving && Theme::motion(1)) {
+    shift_.stop();
+    shift_.setDuration(Theme::motion(200));
+    shift_.start();
+  } else if (!moving && shift_.state() == QAbstractAnimation::Running) {
+    shift_.stop();
+  }
+  if (!moving || !Theme::motion(1))
+    for (Toast &toast : toasts_) toast.slotFrom = toast.slot;
   QWidget *host = parentWidget();
-  const int w = qMin(576, host->width() - 32), h = int(toasts_.size()) * 42 + 36;
+  const int w = qMin(576, host->width() - 32), h = int(std::ceil(highest + 1)) * 42 + 36;
   setGeometry((host->width() - w) / 2, host->height() - h - 8, w, h);
   QWidget::show();
   raise();
@@ -1128,9 +1167,9 @@ void ToastHost::paintEvent(QPaintEvent *) {
   QPainter p(this);
   p.setRenderHint(QPainter::Antialiasing);
   const QFont textFont = Theme::font(14, QFont::Medium), actionFont = Theme::font(12, QFont::Medium);
-  int y = height() - 36;
   for (int i = int(toasts_.size()) - 1; i >= 0; i--) {
     Toast &toast = toasts_[i];
+    const int y = height() - 36 - qRound(slotOf(toast) * 42);
     const int actionWidth = toast.actionText.isEmpty() ? 0 : QFontMetrics(actionFont).horizontalAdvance(toast.actionText) + 24 + 8;
     const int pill = qMin(width(), QFontMetrics(textFont).horizontalAdvance(toast.text) + 14 + 20 + 8 + 14 + actionWidth + 2);
     const QRect box((width() - pill) / 2, y, pill, 36);
@@ -1149,7 +1188,7 @@ void ToastHost::paintEvent(QPaintEvent *) {
     p.drawRoundedRect(QRectF(box).adjusted(0.5, 0.5, -0.5, -0.5), 18, 18);
     const QRectF iconBox(box.x() + 14, box.center().y() - 9.5, 20, 20);
     switch (toast.kind) {
-      case Success: Theme::drawIcon(p, "circle-check", iconBox, Theme::green500); break;
+      case Success: Theme::drawIcon(p, toast.icon.isEmpty() ? QByteArray("circle-check") : toast.icon, iconBox, Theme::green500); break;
       case Error: Theme::drawIcon(p, "circle-x", iconBox, Theme::red500); break;
       case Info: Theme::drawIcon(p, toast.icon.isEmpty() ? QByteArray("info-circle") : toast.icon, iconBox, toast.icon.isEmpty() ? Theme::blue500 : Theme::text); break;
       case Loading: {
@@ -1186,7 +1225,6 @@ void ToastHost::paintEvent(QPaintEvent *) {
       p.drawRoundedRect(QRectF(track.x(), track.y(), track.width() * qBound(0.0, toast.progress, 1.0), 3), 1.5, 1.5);
     }
     p.restore();
-    y -= 42;
   }
 }
 void ToastHost::mouseMoveEvent(QMouseEvent *event) {

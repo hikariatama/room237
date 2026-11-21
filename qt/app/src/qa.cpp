@@ -289,6 +289,24 @@ void QaDriver::handle(const QJsonObject &c) {
     if (!QaFence::inside(path, fence_, true)) return fail(id, QStringLiteral("snapshot fence"));
     w_->grab().save(path);
     reply(id, QJsonValue());
+  } else if (op == QLatin1String("pointer")) {
+    // A synthetic mouse event at global coordinates, sent to the widget under them: move, press, release or leave.
+    const QPoint at = w_->mapFromGlobal(QPoint(c.value(QLatin1String("x")).toInt(), c.value(QLatin1String("y")).toInt()));
+    const QString action = str("action");
+    QWidget *target = w_->childAt(at);
+    if (!target) target = w_;
+    const QPointF local = target->mapFrom(w_, at), global = w_->mapToGlobal(QPointF(at));
+    if (action == QLatin1String("leave")) {
+      QEvent leave(QEvent::Leave);
+      QCoreApplication::sendEvent(target, &leave);
+    } else {
+      const QEvent::Type type = action == QLatin1String("press") ? QEvent::MouseButtonPress : action == QLatin1String("release") ? QEvent::MouseButtonRelease : action == QLatin1String("doubleclick") ? QEvent::MouseButtonDblClick : QEvent::MouseMove;
+      const Qt::MouseButton button = type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton;
+      const Qt::MouseButtons buttons = type == QEvent::MouseButtonPress ? Qt::LeftButton : Qt::NoButton;
+      QMouseEvent event(type, local, local, global, button, buttons, Qt::NoModifier);
+      QCoreApplication::sendEvent(target, &event);
+    }
+    reply(id, QJsonObject{{QStringLiteral("target"), QString::fromLatin1(target->metaObject()->className())}});
   } else if (op == QLatin1String("configure")) {
     if (c.contains(QLatin1String("columns"))) w_->gallery()->setColumns(c.value(QLatin1String("columns")).toInt());
     reply(id, QJsonObject{{QStringLiteral("columns"), w_->gallery()->columns()}});
@@ -406,6 +424,11 @@ void QaDriver::handle(const QJsonObject &c) {
         if (pendingEntries_.size() != want.size()) return fail(id, QStringLiteral("entries mismatch"));
         reply(id, QJsonObject{{QStringLiteral("count"), pendingEntries_.size()}});
       });
+    });
+  } else if (op == QLatin1String("prepare_selection")) {
+    w_->gallery()->collectSelection([=, this](QVector<MediaItem> items) {
+      pendingEntries_ = std::move(items);
+      reply(id, QJsonObject{{QStringLiteral("count"), pendingEntries_.size()}});
     });
   } else if (op == QLatin1String("move_entries")) {
     w_->moveItems(pendingEntries_, str("to"), [=, this](QString error) {

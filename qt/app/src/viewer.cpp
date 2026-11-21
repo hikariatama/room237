@@ -325,7 +325,7 @@ Viewer::Viewer(QWidget *parent) : QWidget(parent) {
   chromeTimer_.setInterval(2200);
   connect(&chromeTimer_, &QTimer::timeout, this, [this] { setChromeVisible(false); });
   // Both ways run forward on the same spring: opening goes 0 to 1, closing 1 to 0, and each overshoots a little at its end.
-  QEasingCurve spring(QEasingCurve::Custom);
+  QEasingCurve spring;
   spring.setCustomType(springProgress);
   openAnimation_.setEasingCurve(spring);
   openAnimation_.setStartValue(0.0);

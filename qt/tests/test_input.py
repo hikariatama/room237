@@ -110,9 +110,11 @@ try:
     check("heart does not open the viewer", not app.op("viewer_state")["open"])
     send(op="click", x=rect["x"] + rect["w"] - 14, y=rect["y"] + 14)
     wait(lambda: not app.op("item", index=1)["favorite"])
-    # Plain click opens the viewer; arrows and Esc work with real keys.
+    # A click selects; a double click opens the viewer. Arrows and Esc work with real keys.
     send(op="click", x=x, y=y)
-    check("click opens viewer", wait(lambda: app.op("viewer_state")["ready"]))
+    check("click selects without opening", app.op("selection")["count"] == 1 and not app.op("viewer_state")["open"])
+    send(op="click", x=x, y=y, count=2)
+    check("double click opens viewer", wait(lambda: app.op("viewer_state")["ready"]))
     first = app.op("viewer_state")["path"]
     time.sleep(0.3)
     send(op="key", code=124)
@@ -122,6 +124,7 @@ try:
     send(op="key", code=53)
     check("Esc closes", wait(lambda: not app.op("viewer_state")["open"], 3))
     # Cmd-click and Shift-click selection.
+    app.op("select_clear")
     send(op="click", x=center(tile(0))[0], y=center(tile(0))[1], flags=["cmd"])
     send(op="click", x=center(tile(3))[0], y=center(tile(3))[1], flags=["shift"])
     check("cmd-click then shift-click selects a range", wait(lambda: app.op("selection")["count"] == 4), app.op("selection"))

@@ -3,6 +3,7 @@
 // disk under random names, and its album databases hold encrypted rows. The master key exists only in memory while the
 // root is unlocked; it is unwrapped from a key slot with the password (Argon2id) and a second factor.
 #include "fs.h"
+#include "file_access.h"
 
 #include <QFile>
 #include <QIODevice>
@@ -70,6 +71,7 @@ std::optional<Secret> parseRecoveryKey(const QString &text);
 struct Keys {
   Secret master, rows, names;
   QString root, id;
+  std::shared_ptr<FileAccess::State> filesystem;
 };
 void unlock(const QString &root, Keys keys);
 void lock(const QString &root);

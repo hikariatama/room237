@@ -1,4 +1,5 @@
 #include "metadata.h"
+#include "file_access.h"
 
 #include "album_db.h"
 #include "catalog.h"
@@ -709,7 +710,7 @@ static ProbeResult probeWithSettings(const QString &path, bool isVideo, const Ad
   DecodePermit permit;
   QStringList args = ffmpegTuning(isVideo);
   // One frame is enough for dimensions and stream tags; do not decode an entire video.
-  args << QStringLiteral("-hide_banner") << QStringLiteral("-i") << path << QStringLiteral("-frames:v") << QStringLiteral("1") << QStringLiteral("-an") << QStringLiteral("-f") << QStringLiteral("null") << QStringLiteral("-");
+  args << QStringLiteral("-hide_banner") << QStringLiteral("-i") << decoderPath(path) << QStringLiteral("-frames:v") << QStringLiteral("1") << QStringLiteral("-an") << QStringLiteral("-f") << QStringLiteral("null") << QStringLiteral("-");
   const quint64 timeout = settings.metadata.ffmpegProbeTimeoutSecs.value_or(settings.ffmpeg.timeoutSecs);
   const ProcessResult output = runChecked(ffmpegPath(), args, int(timeout * 1000));
   const bool turned = !isVideo && probe::exifTurnsPicture(path);
@@ -729,7 +730,7 @@ static ProbeResult probeEncrypted(QIODevice &plain, const QString &ext, bool isV
   QStringList args = ffmpegTuning(isVideo);
   args << QStringLiteral("-hide_banner") << QStringLiteral("-i") << QStringLiteral("pipe:0") << QStringLiteral("-frames:v") << QStringLiteral("1") << QStringLiteral("-an") << QStringLiteral("-f") << QStringLiteral("null") << QStringLiteral("-");
   const quint64 timeout = settings.metadata.ffmpegProbeTimeoutSecs.value_or(settings.ffmpeg.timeoutSecs);
-  const ProcessResult output = runWithInput(ffmpegPath(), args, plain, int(timeout * 1000) * 4);
+  const ProcessResult output = runWithInput(ffmpegPath(), args, plain, int(timeout * 1000) * 4, 0);  // null muxer: no binary stdout.
   if (!output.success && output.stderrBytes.indexOf("Video:") < 0) fail(QStringLiteral("Cannot read metadata: %1").arg(QString::fromUtf8(output.stderrBytes)));
   ProbeResult result = parseProbeOutput(QString::fromUtf8(output.stderrBytes), settings.metadata.parseCreationTime);
   if (!isVideo && (ext == QLatin1String("jpg") || ext == QLatin1String("jpeg") || ext == QLatin1String("tif") || ext == QLatin1String("tiff"))) {

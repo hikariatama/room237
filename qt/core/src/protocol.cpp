@@ -249,7 +249,7 @@ QJsonValue run(const QString &method, const QJsonObject &p) {
   if (m == "get_album_size") return qint64(album::getAlbumSize(str(p, "dir")));
   if (m == "get_albums_detached") return album::getAlbumsDetached(str(p, "rootDir"));
   if (m == "move_media") return album::moveMedia(str(p, "source"), str(p, "target"), str(p, "media"));
-  if (m == "move_media_batch") return stringArray(album::moveMediaBatch(str(p, "source"), str(p, "target"), strings(p, "media")));
+  if (m == "move_media_batch") return stringArray(album::moveMediaBatchWithHook(str(p, "source"), str(p, "target"), strings(p, "media"), readSettings().album.moveRenameThumbsAndMeta, [](const QString &, const QString &, const QString &) {}, p.contains("observed") ? observed(p) : std::vector<metadata::ObservedMedia>{}));
   if (m == "is_preloading") return preload::isPreloading();
   if (m == "lock_until_preloaded") return preload::lockUntilPreloaded();
   if (m == "set_allow_open") {

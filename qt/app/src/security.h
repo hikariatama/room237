@@ -72,7 +72,7 @@ private:
   KeyInput *checkInput_;
   QLabel *pinLabel_, *error_, *keyText_, *touch_, *checkText_, *checkError_;
   QVector<std::pair<FactorChoice, Switch *>> factors_;
-  TextButton *encrypt_;
+  TextButton *encrypt_, *cancel_;
   IconButton *reveal_;
   int groupA_ = 0, groupB_ = 0;
   bool keyShown_ = false, fidoPin_ = false;
@@ -83,7 +83,7 @@ private:
 class EncryptOffer : public Popover {
   Q_OBJECT
 public:
-  EncryptOffer(QWidget *host, const QString &rootName, std::function<void()> encrypt, std::function<void()> later, std::function<void()> never);
+  EncryptOffer(QWidget *host, const QString &rootName, std::function<void()> encrypt, std::function<void()> later);
 #ifdef ROOM237_QA
   void qaChoose(const QString &choice);
 private:

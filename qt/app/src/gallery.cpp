@@ -85,11 +85,29 @@ GalleryView::GalleryView(GalleryModel *model, ThumbPipeline *pipeline, QWidget *
   // Prefetched rows need no repaint; only tiles on screen change the picture.
   connect(pipeline_, &ThumbPipeline::ready, this, [this] {
     if (!isVisible()) return;
-    const int ready = visibleState().ready;
+    const Visible state = visibleState();
+    const int ready = state.ready;
+    if (!stale_.isEmpty() && state.ready == state.expected) stale_.clear();
     if (ready != visibleReadyPainted_) {
       visibleReadyPainted_ = ready;
       viewport()->update();
     }
+  });
+  connect(model_, &GalleryModel::aboutToReset, this, [this] {
+    stale_.clear();
+    const auto [first, last] = visibleRange();
+    for (int index = first; index <= last; index++) {
+      const MediaItem *item = model_->item(index);
+      if (!item) continue;
+      if (const QImage *picture = pipeline_->get(cacheKey(*item, deviceSizeFor(index)))) stale_.insert(staleKey(*item), *picture);
+    }
+    staleExpiry_.start();
+  });
+  staleExpiry_.setSingleShot(true);
+  staleExpiry_.setInterval(3000);
+  connect(&staleExpiry_, &QTimer::timeout, this, [this] {
+    stale_.clear();
+    viewport()->update();
   });
   connect(model_, &GalleryModel::reset, this, [this] {
     all_ = false;
@@ -99,6 +117,7 @@ GalleryView::GalleryView(GalleryModel *model, ThumbPipeline *pipeline, QWidget *
     springs_.clear();
     hoverHit_ = HitNone;
     relayout();
+    startSlides();
     emit selectionChanged();
   });
   connect(model_, &GalleryModel::pageLoaded, this, [this] {
@@ -121,6 +140,24 @@ GalleryView::GalleryView(GalleryModel *model, ThumbPipeline *pipeline, QWidget *
       if (!rec_.first.contains(key)) rec_.first.insert(key, now);
       if (ok && !rec_.readyAt.contains(key)) rec_.readyAt.insert(key, now);
     }
+  });
+  leaveFade_.setStartValue(0.0);
+  leaveFade_.setEndValue(1.0);
+  leaveFade_.setEasingCurve(QEasingCurve::OutCubic);
+  connect(&leaveFade_, &QVariantAnimation::valueChanged, this, [this](const QVariant &v) {
+    leaveProgress_ = v.toReal();
+    viewport()->update();
+  });
+  slide_.setStartValue(0.0);
+  slide_.setEndValue(1.0);
+  slide_.setEasingCurve(Theme::bezier(0.22, 1, 0.36, 1));
+  connect(&slide_, &QVariantAnimation::valueChanged, this, [this](const QVariant &v) {
+    slideProgress_ = v.toReal();
+    viewport()->update();
+  });
+  connect(&slide_, &QVariantAnimation::finished, this, [this] {
+    slides_.clear();
+    viewport()->update();
   });
   springTick_.setTimerType(Qt::PreciseTimer);
   springTick_.setInterval(8);
@@ -357,6 +394,77 @@ QRect GalleryView::springRect(int index) const {
   const int margin = qCeil(qMax(rect.width(), rect.height()) * 0.04) + 2;
   return rect.adjusted(-margin, -margin, margin, margin);
 }
+void GalleryView::removeItems(const QVector<MediaItem> &items) {
+  if (items.isEmpty()) return;
+  for (const MediaItem &item : items) leaving_.insert(item.path());
+  // Where every tile on screen stands now, in content coordinates, for the slide after the album lists itself again.
+  slideFrom_.clear();
+  const int top = verticalScrollBar()->value();
+  const auto [first, last] = visibleRange(viewport()->height());
+  for (int index = first; index <= last; index++)
+    if (const MediaItem *item = model_->item(index)) slideFrom_.insert(item->path(), QPointF(tileRect(index).topLeft() + QPoint(0, top)));
+  if (confirm_ >= 0) confirm_ = -1;
+  setHovered(-1, {});
+  leaveFade_.stop();
+  leaveFade_.setDuration(Theme::motion(180));
+  leaveProgress_ = leaveFade_.duration() ? 0 : 1;
+  if (leaveFade_.duration()) leaveFade_.start();
+  viewport()->update();
+}
+void GalleryView::settleRemoval() {
+  leaving_.clear();
+  slideFrom_.clear();
+  viewport()->update();
+}
+bool GalleryView::isLeaving(int index) const {
+  if (leaving_.isEmpty()) return false;
+  const MediaItem *item = model_->item(index);
+  return item && leaving_.contains(item->path());
+}
+// After a removal the album lists itself again: each tile that was on screen starts where it stood and slides to
+// its new place. A listing in which nothing moved came before the removal took effect; the next one slides.
+void GalleryView::startSlides() {
+  slides_.clear();
+  if (slideFrom_.isEmpty()) return;
+  const int top = verticalScrollBar()->value();
+  const auto [first, last] = visibleRange();
+  for (int index = first; index <= last; index++) {
+    const MediaItem *item = model_->item(index);
+    if (!item) continue;
+    const auto from = slideFrom_.constFind(item->path());
+    if (from == slideFrom_.cend()) continue;
+    const QRect rect = tileRect(index);
+    const QPointF delta = *from - QPointF(rect.topLeft() + QPoint(0, top));
+    if (delta.isNull()) continue;
+    const bool wraps = qAbs(delta.y()) > rect.height() / 2 && qAbs(delta.x()) > rect.width();
+    slides_.insert(index, wraps ? Slide{QPointF(rect.width() / 2.0, 0), true} : Slide{delta, false});
+  }
+  if (slides_.isEmpty()) return;
+  slideFrom_.clear();
+  slide_.stop();
+  slide_.setDuration(Theme::motion(260));
+  if (!slide_.duration()) {
+    slides_.clear();
+    return;
+  }
+  slideProgress_ = 0;
+  slide_.start();
+}
+// A grown tile stays inside the content: at its edges it grows inward instead of under the gallery's frame.
+QPointF GalleryView::growShift(const QRect &rect, qreal scale) const {
+  if (scale <= 1) return {};
+  const QRectF tile(rect);
+  const QSizeF size = tile.size() * scale;
+  const QRectF grown(tile.center() - QPointF(size.width(), size.height()) / 2, size);
+  const QScrollBar *bar = verticalScrollBar();
+  const qreal top = -bar->value(), bottom = top + bar->maximum() + viewport()->height(), right = layoutWidth();
+  QPointF shift;
+  if (grown.left() < 0) shift.rx() = -grown.left();
+  else if (grown.right() > right) shift.rx() = right - grown.right();
+  if (grown.top() < top) shift.ry() = top - grown.top();
+  else if (grown.bottom() > bottom) shift.ry() = bottom - grown.bottom();
+  return shift;
+}
 void GalleryView::setTileTarget(int index, qreal target) {
   if (index < 0) return;
   auto it = springs_.find(index);
@@ -382,12 +490,7 @@ void GalleryView::setHoverHit(Hit hit) {
   if (hoverHit_ != HitNone && hovered_ >= 0) viewport()->update(springRect(hovered_));
   hoverHit_ = hit;
   hitSpring_ = Spring{};
-  hitSpring_.target = hit == HitNone ? 1 : 1.1;
-  if (Theme::reduceMotion()) hitSpring_.value = hitSpring_.target;
-  if (!springTick_.isActive()) {
-    springLast_ = springClock_.elapsed();
-    springTick_.start();
-  }
+  if (hovered_ >= 0) viewport()->update(tileRect(hovered_));
 }
 void GalleryView::stepSprings() {
   const qint64 now = springClock_.elapsed();
@@ -516,7 +619,10 @@ const QImage *GalleryView::pictureFor(int index) {
   const MediaItem *item = model_->item(index);
   if (!item) return nullptr;
   const QImage *picture = pipeline_->get(cacheKey(*item, deviceSizeFor(index)));
-  return picture ? picture : model_->blur(*item);
+  if (picture) return picture;
+  if (!stale_.isEmpty())
+    if (const auto it = stale_.constFind(staleKey(*item)); it != stale_.cend()) return &*it;
+  return model_->blur(*item);
 }
 void GalleryView::paintTile(QPainter &painter, const QRect &rect, int index, const QImage *picture) {
   const MediaItem *item = model_->item(index);
@@ -619,9 +725,9 @@ void GalleryView::paintExtras(QPainter &painter, const QRect &rect, int index) {
     }
     const QRect del = actionRect(rect, HitConfirmDelete), cancel = actionRect(rect, HitConfirmCancel);
     painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(0xfb, 0x2c, 0x36, 204));
+    painter.setBrush(QColor(0xfb, 0x2c, 0x36, hoverHit_ == HitConfirmDelete ? 255 : 204));
     painter.drawRoundedRect(del, Theme::kRadiusMd, Theme::kRadiusMd);
-    painter.setBrush(QColor(255, 255, 255, 26));
+    painter.setBrush(QColor(255, 255, 255, hoverHit_ == HitConfirmCancel ? 56 : 26));
     painter.drawRoundedRect(cancel, Theme::kRadiusMd, Theme::kRadiusMd);
     painter.setPen(Qt::white);
     if (wide) {
@@ -727,18 +833,31 @@ void GalleryView::paintEvent(QPaintEvent *event) {
   for (int index = first; index <= last; index++) {
     const QImage *picture = pictureFor(index);
     pictures.append(picture ? *picture : QImage());
-    if (picture && !picture->hasAlphaChannel() && tileScale(index) >= 1) gaps -= tileRect(index);
+    if (picture && !picture->hasAlphaChannel() && tileScale(index) >= 1 && !slides_.contains(index) && !isLeaving(index)) gaps -= tileRect(index);
   }
   const QPoint offset = viewport()->mapTo(window(), QPoint(0, 0));
   for (const QRect &gap : gaps) Theme::paintPage(painter, gap, offset);
   painter.setRenderHint(QPainter::SmoothPixmapTransform);
   if (model_->total() == 0) paintEmpty(painter);
+  // Hover and press springs scale a tile; a removal fades the leaving ones out and slides the rest into place.
   const auto scaled = [&](int index, auto paint) {
-    const qreal k = tileScale(index);
-    if (qFuzzyCompare(k, 1)) return paint();
-    const QPointF center = QRectF(tileRect(index)).center();
+    qreal k = tileScale(index), opacity = 1;
+    QPointF slide;
+    if (const auto it = slides_.constFind(index); it != slides_.cend()) {
+      slide = it->from * (1 - slideProgress_);
+      if (it->fade) opacity = slideProgress_;
+    }
+    if (isLeaving(index)) {
+      opacity = 1 - leaveProgress_;
+      k *= 1 - 0.06 * leaveProgress_;
+    }
+    if (opacity <= 0) return;
+    if (qFuzzyCompare(k, 1) && slide.isNull() && opacity >= 1) return paint();
+    const QRect rect = tileRect(index);
+    const QPointF center = QRectF(rect).center();
     painter.save();
-    painter.translate(center);
+    painter.setOpacity(opacity);
+    painter.translate(center + slide + growShift(rect, k));
     painter.scale(k, k);
     painter.translate(-center);
     paint();
@@ -747,7 +866,7 @@ void GalleryView::paintEvent(QPaintEvent *event) {
   // Tiles in motion go on top of their neighbours, the hovered one last.
   QVarLengthArray<int, 8> moving;
   for (int index = first; index <= last; index++) {
-    if (springs_.contains(index)) {
+    if (springs_.contains(index) || slides_.contains(index) || isLeaving(index)) {
       if (index != hovered_) moving.append(index);
       continue;
     }
@@ -756,12 +875,12 @@ void GalleryView::paintEvent(QPaintEvent *event) {
     const QImage &picture = pictures[index - first];
     paintTile(painter, rect, index, picture.isNull() ? nullptr : &picture);
   }
-  if (springs_.contains(hovered_) && hovered_ >= first && hovered_ <= last) moving.append(hovered_);
+  if ((springs_.contains(hovered_) || slides_.contains(hovered_) || isLeaving(hovered_)) && hovered_ >= first && hovered_ <= last) moving.append(hovered_);
   for (const int index : moving) {
     const QImage &picture = pictures[index - first];
     scaled(index, [&] { paintTile(painter, tileRect(index), index, picture.isNull() ? nullptr : &picture); });
   }
-  if (hovered_ >= first && hovered_ <= last && !scrolling_) scaled(hovered_, [&] { paintExtras(painter, tileRect(hovered_), hovered_); });
+  if (hovered_ >= first && hovered_ <= last && !scrolling_ && !isLeaving(hovered_)) scaled(hovered_, [&] { paintExtras(painter, tileRect(hovered_), hovered_); });
   if (!groups_.isEmpty()) paintGroups(painter);
   // Fades over the content while there is more to scroll.
   QScrollBar *bar = verticalScrollBar();
@@ -944,6 +1063,7 @@ void GalleryView::mousePressEvent(QMouseEvent *event) {
     return;
   }
   pressIndex_ = indexAt(pos);
+  if (isLeaving(pressIndex_)) pressIndex_ = -1;
   pressPos_ = pos;
   pressHandled_ = false;
   if (pressIndex_ < 0) {
@@ -986,18 +1106,13 @@ void GalleryView::setHovered(int index, QPoint) {
   const int previous = hovered_;
   hovered_ = index;
   setTileTarget(previous, 1);
-  setTileTarget(index, index == pressIndex_ ? 0.98 : 1.027);
+  setTileTarget(index, 1);
   setHoverHit(HitNone);
   if (previous >= 0) viewport()->update(tileRect(previous));
   if (index >= 0) {
-    hoverAlpha_ = 0;
     hoverFade_.stop();
-    if (Theme::reduceMotion()) {
-      hoverAlpha_ = 1;
-      viewport()->update(tileRect(index));
-    } else {
-      hoverFade_.start();
-    }
+    hoverAlpha_ = 1;
+    viewport()->update(tileRect(index));
   }
   if (confirm_ >= 0 && confirm_ != index) {
     viewport()->update(tileRect(confirm_));
@@ -1012,7 +1127,8 @@ void GalleryView::mouseMoveEvent(QMouseEvent *event) {
   }
   if (!(event->buttons() & Qt::LeftButton)) {
     if (!scrolling_) {
-      const int index = indexAt(event->pos());
+      int index = indexAt(event->pos());
+      if (isLeaving(index)) index = -1;
       setHovered(index, event->pos());
       const Hit hit = hitAt(index, event->pos());
       setHoverHit(hit);
@@ -1029,14 +1145,26 @@ void GalleryView::mouseMoveEvent(QMouseEvent *event) {
 }
 void GalleryView::mouseReleaseEvent(QMouseEvent *event) {
   draggingThumb_ = false;
-  if (pressIndex_ >= 0) setTileTarget(pressIndex_, pressIndex_ == hovered_ ? 1.027 : 1);
-  if (hoverHit_ != HitNone) hitSpring_.target = 1.1;
+  if (pressIndex_ >= 0) setTileTarget(pressIndex_, 1);
+  if (hoverHit_ != HitNone) hitSpring_.target = 1;
   if (blocked_) return;
   if (event->button() == Qt::LeftButton && pressIndex_ >= 0 && !pressHandled_ && pressIndex_ == indexAt(event->pos())) {
-    focus_ = pressIndex_;
-    emit openRequested(pressIndex_);
+    focus_ = anchor_ = pressIndex_;
+    all_ = false;
+    excluded_.clear();
+    selected_ = {pressIndex_};
+    viewport()->update();
+    emit selectionChanged();
   }
   pressIndex_ = -1;
+}
+void GalleryView::mouseDoubleClickEvent(QMouseEvent *event) {
+  if (blocked_ || event->button() != Qt::LeftButton || event->modifiers() != Qt::NoModifier) return;
+  const int index = indexAt(event->pos());
+  if (index < 0 || isLeaving(index) || hitAt(index, event->pos()) != HitNone) return;
+  pressIndex_ = -1;
+  focus_ = index;
+  emit openRequested(index);
 }
 void GalleryView::enterEvent(QEnterEvent *event) {
   QAbstractScrollArea::enterEvent(event);

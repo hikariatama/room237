@@ -59,6 +59,10 @@ public:
   int focusedIndex() const { return focus_; }
   bool nonUniform() const;
   VirtualListSource accessibleSource();
+  // Items leaving the album (deleted or moved out): they fade out now, and when the album lists itself again the
+  // remaining tiles slide from where they were. settleRemoval() ends it; items still listed then come back.
+  void removeItems(const QVector<MediaItem> &items);
+  void settleRemoval();
 signals:
   void dragFinished();
   void exportWithheld();  // A drag of encrypted files ended outside the app before export was allowed.
@@ -76,6 +80,7 @@ protected:
   void mousePressEvent(QMouseEvent *event) override;
   void mouseMoveEvent(QMouseEvent *event) override;
   void mouseReleaseEvent(QMouseEvent *event) override;
+  void mouseDoubleClickEvent(QMouseEvent *event) override;
   void keyPressEvent(QKeyEvent *event) override;
   void scrollContentsBy(int dx, int dy) override;
   void contextMenuEvent(QContextMenuEvent *event) override;
@@ -127,6 +132,22 @@ private:
   void stepSprings();
   void setHoverHit(Hit hit);
   QRect springRect(int index) const;
+  QPointF growShift(const QRect &rect, qreal scale) const;
+  bool isLeaving(int index) const;
+  // Pictures of the tiles on screen before a new listing, by album and shown name: a file renamed by encryption, or
+  // a tile moved by a removal, keeps its picture until its own preview is ready.
+  static QString staleKey(const MediaItem &item) { return item.albumPath + QLatin1Char('/') + item.label(); }
+  QHash<QString, QImage> stale_;
+  QTimer staleExpiry_;
+  void startSlides();
+  QSet<QString> leaving_;
+  QHash<QString, QPointF> slideFrom_;  // Content positions of the tiles on screen when the removal started.
+  // Tiles that slide into place, by index: the offset they start from, and whether they fade in (a tile that
+  // wraps to another row comes in from the right instead of crossing the grid).
+  struct Slide { QPointF from; bool fade = false; };
+  QHash<int, Slide> slides_;
+  QVariantAnimation leaveFade_, slide_;
+  qreal leaveProgress_ = 0, slideProgress_ = 1;
   QHash<int, Spring> springs_;
   Spring hitSpring_;
   Hit hoverHit_ = HitNone;

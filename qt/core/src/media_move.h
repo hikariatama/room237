@@ -26,15 +26,20 @@ public:
   void recordMetadata(const metadata::MoveMetadataUndo &undo);
   void commit(const std::function<void()> &checkpoint);
   void finish(const std::function<void(const QString &)> &checkpoint) const;
-  void rollback(const metadata::MetadataWriteGuard *guard);
+  void rollback(const metadata::MetadataWriteGuard *guard, const std::function<void(const QString &)> &checkpoint = [](const QString &) {});
+  void moveFile(const FileRecord &file, const std::function<void(const QString &)> &checkpoint);
+  bool hasRetainedClaims() const;
+  void restoreFile(const FileRecord &file);
   const QString &staging() const { return staging_; }
 private:
+  std::unique_ptr<FileAccess> filesystem_;
   void append(const QString &line, bool terminal);
   void sync();
   Header header_;
   QString staging_, peer_;
   std::unique_ptr<QFile> events_;
   bool failed_ = false;
+  std::shared_ptr<Directory> stagingCapability_, peerCapability_;
 };
 
 void recoverAlbum(const QString &album);

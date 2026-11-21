@@ -1,4 +1,5 @@
 #include "vault.h"
+#include "file_access.h"
 
 #include "json.h"
 #include "util.h"
@@ -91,12 +92,7 @@ QByteArray metaPlain(const FileMeta &meta) {
   if (meta.birthSec) o.insert(QStringLiteral("birth"), QString::number(*meta.birthSec));
   if (!meta.xattrs.isEmpty()) o.insert(QStringLiteral("xattrs"), meta.xattrs);
   QByteArray text = QJsonDocument(o).toJson(QJsonDocument::Compact);
-  if (text.size() > kMetaCipher) {
-    // Attributes are kept only while they fit; the name, times and digest always do.
-    o.remove(QStringLiteral("xattrs"));
-    text = QJsonDocument(o).toJson(QJsonDocument::Compact);
-  }
-  if (text.size() > kMetaCipher) fail(QStringLiteral("File name is too long to encrypt"));
+  if (text.size() > kMetaCipher) fail(QStringLiteral("File attributes are too large to encrypt without loss; original retained"));
   return text + QByteArray(kMetaCipher - text.size(), ' ');
 }
 FileMeta parseMeta(const QByteArray &plain) {
@@ -166,7 +162,24 @@ Header readHeader(const Keys &keys, QFile &file) {
   return header;
 }
 
+void setOpenedMtime(QFile &file, qint64 mtimeNs) {
+#ifndef Q_OS_WIN
+  timespec times[2]{{0, UTIME_OMIT}, {time_t(mtimeNs / 1000000000LL), long(mtimeNs % 1000000000LL)}};
+  if (futimens(file.handle(), times) != 0) fail(QStringLiteral("Cannot restore admitted file modification time"));
+#else
+  if (!file.setFileTime(QDateTime::fromMSecsSinceEpoch(mtimeNs / 1000000), QFileDevice::FileModificationTime)) fail(file.errorString());
+#endif
+}
+std::unique_ptr<FileAccess> mutationAccess(const Keys &keys, const QString &target) {
+  if (!keys.filesystem || FileAccess::current(target) || !path::startsWith(target, keys.root)) return {};
+  return std::make_unique<FileAccess>(FileAccess::snapshot(keys.filesystem));
+}
 void setMtime(const QString &p, qint64 mtimeNs) {
+  if (auto *view = FileAccess::current(p)) {
+    auto file = view->open(p, QIODevice::ReadOnly);
+    setOpenedMtime(*file, mtimeNs);
+    return;
+  }
 #ifndef Q_OS_WIN
   struct timespec times[2];
   times[0].tv_sec = 0;
@@ -176,14 +189,14 @@ void setMtime(const QString &p, qint64 mtimeNs) {
   utimensat(AT_FDCWD, QFile::encodeName(p).constData(), times, 0);
 #else
   QFile file(p);
-  if (file.open(QIODevice::ReadWrite)) file.setFileTime(QDateTime::fromMSecsSinceEpoch(mtimeNs / 1000000), QFileDevice::FileModificationTime);
+  if (openFile(file, p, QIODevice::ReadWrite)) file.setFileTime(QDateTime::fromMSecsSinceEpoch(mtimeNs / 1000000), QFileDevice::FileModificationTime);
 #endif
 }
 
 void writeStream(const Keys &keys, QIODevice &input, quint64 size, const QString &target, FileMeta meta, bool hashInput, bool replace = false) {
-  TempFile temporary(path::parent(target), QStringLiteral(".room237-vault-tmp-"));
+  TempFile temporary(path::parent(target), QStringLiteral(".room237-vault-tmp-encrypt-") + sha256Hex(path::fileName(target).toUtf8()) + QLatin1Char('-'));
   QFile out(temporary.path());
-  if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) fail(out.errorString());
+  if (!openFile(out, temporary.path(), QIODevice::WriteOnly | QIODevice::Truncate)) fail(out.errorString());
   const QByteArray salt = randomBytes(int(kSaltSize));
   const Secret key = fileKey(keys, salt);
   const Secret dataKey = derive(key, QByteArrayLiteral("data"));
@@ -346,52 +359,41 @@ std::optional<Secret> parseRecoveryKey(const QString &text) {
   return Secret(key);
 }
 
-// --- Registry of unlocked roots ------------------------------------------------------------------------------------
+// --- Active root key ----------------------------------------------------------------------------------------------
 
 namespace {
-std::shared_mutex registryMutex;
-std::vector<std::pair<QStringList, std::shared_ptr<Keys>>> unlocked;
+std::shared_mutex activeKeyMutex;
+std::shared_ptr<Keys> activeKeys;
+QString activeCanonicalRoot;
 std::mutex rootCacheMutex;
 QHash<QString, std::optional<QString>> rootCache;
 }  // namespace
 
 void unlock(const QString &root, Keys keys) {
-  QStringList spellings{root};
-  if (const auto real = tryCanonical(root); real && *real != root) spellings << *real;
+  FileAccess access({root}, true);
+  keys.filesystem = FileAccess::capture();
   keys.root = root;
+  const QString real = tryCanonical(root).value_or(root);
   auto shared = std::make_shared<Keys>(std::move(keys));
-  std::unique_lock lock(registryMutex);
-  unlocked.erase(std::remove_if(unlocked.begin(), unlocked.end(), [&](const auto &entry) { return entry.second->root == root; }), unlocked.end());
-  unlocked.emplace_back(spellings, shared);
+  std::unique_lock lock(activeKeyMutex);
+  activeKeys = std::move(shared);
+  activeCanonicalRoot = real;
   std::lock_guard cache(rootCacheMutex);
   rootCache.clear();
 }
 
 void lock(const QString &root) {
-  std::vector<std::shared_ptr<Keys>> released;
-  {
-    std::unique_lock lock(registryMutex);
-    for (auto it = unlocked.begin(); it != unlocked.end();) {
-      if (it->second->root == root || it->first.contains(root)) {
-        released.push_back(it->second);
-        it = unlocked.erase(it);
-      } else {
-        ++it;
-      }
-    }
+  std::unique_lock lock(activeKeyMutex);
+  if (activeKeys && (activeKeys->root == root || activeCanonicalRoot == root)) {
+    activeKeys.reset();
+    activeCanonicalRoot.clear();
   }
-  // Readers that still hold the keys (an open decrypting device) finish with their own reference; the last one to
-  // release them wipes the bytes.
-  released.clear();
 }
 
 void lockAll() {
-  QStringList roots;
-  {
-    std::shared_lock lock(registryMutex);
-    for (const auto &entry : unlocked) roots << entry.second->root;
-  }
-  for (const QString &root : roots) lock(root);
+  std::unique_lock lock(activeKeyMutex);
+  activeKeys.reset();
+  activeCanonicalRoot.clear();
 }
 
 void forgetRoots() {
@@ -420,17 +422,14 @@ std::optional<QString> vaultRoot(const QString &p) {
 bool isVaultPath(const QString &p) { return vaultRoot(p).has_value(); }
 
 std::shared_ptr<const Keys> keysFor(const QString &p, bool *inVault) {
-  {
-    std::shared_lock lock(registryMutex);
-    for (const auto &[spellings, keys] : unlocked)
-      for (const QString &root : spellings)
-        if (path::startsWith(p, root)) {
-          if (inVault) *inVault = true;
-          return keys;
-        }
-  }
-  if (inVault) *inVault = isVaultPath(p);
-  return nullptr;
+  const auto owner = vaultRoot(p);
+  if (inVault) *inVault = owner.has_value();
+  std::shared_lock lock(activeKeyMutex);
+  if (!activeKeys || !owner) return nullptr;
+  if (*owner != activeKeys->root && *owner != activeCanonicalRoot) return nullptr;
+  if (!path::startsWith(p, activeKeys->root) && !path::startsWith(p, activeCanonicalRoot)) return nullptr;
+  if (!FileAccess::rootCurrent(activeKeys->filesystem, p)) return nullptr;
+  return activeKeys;
 }
 
 void requireUnlocked(const QString &p) {
@@ -442,21 +441,23 @@ void requireUnlocked(const QString &p) {
 
 bool isEncryptedFile(const QString &p) {
   QFile file(p);
-  if (!file.open(QIODevice::ReadOnly)) return false;
+  if (!openFile(file, p, QIODevice::ReadOnly)) return false;
   return file.read(8) == QByteArray(kMagic, 8);
 }
 
 QString newPhysicalName() { return base32(randomBytes(16), false) + QLatin1Char('.') + kExtension; }
 
 FileMeta encryptFile(const Keys &keys, const QString &plain, const QString &target, const FileMeta &meta) {
+  auto access = mutationAccess(keys, target);
   QFile input(plain);
-  if (!input.open(QIODevice::ReadOnly)) fail(input.errorString());
+  if (!openFile(input, plain, QIODevice::ReadOnly)) fail(input.errorString());
   FileMeta stored = meta;
   writeStream(keys, input, quint64(input.size()), target, stored, true);
   return readMeta(keys, target);
 }
 
 void encryptBytes(const Keys &keys, const QByteArray &plain, const QString &target, const FileMeta &meta, bool replace) {
+  auto access = mutationAccess(keys, target);
   QByteArray copy = plain;
   QBuffer buffer(&copy);
   buffer.open(QIODevice::ReadOnly);
@@ -465,14 +466,15 @@ void encryptBytes(const Keys &keys, const QByteArray &plain, const QString &targ
 
 FileMeta readMeta(const Keys &keys, const QString &p) {
   QFile file(p);
-  if (!file.open(QIODevice::ReadOnly)) fail(file.errorString());
+  if (!openFile(file, p, QIODevice::ReadOnly)) fail(file.errorString());
   return readHeader(keys, file).meta;
 }
 
 void writeMeta(const Keys &keys, const QString &p, const FileMeta &meta) {
-  const FileInfo before = stat(p);
+  auto access = mutationAccess(keys, p);
   QFile file(p);
-  if (!file.open(QIODevice::ReadWrite)) fail(file.errorString());
+  if (!openFile(file, p, QIODevice::ReadWrite)) fail(file.errorString());
+  const FileInfo before = openedFileInfo(file);
   const Header header = readHeader(keys, file);
   const Secret key = derive(fileKey(keys, header.salt), QByteArrayLiteral("meta"));
   FileMeta next = meta;
@@ -481,10 +483,8 @@ void writeMeta(const Keys &keys, const QString &p, const FileMeta &meta) {
   // The inactive slot takes the new generation; a crash midway leaves the previous one readable.
   file.seek(kMetaOffset + (header.activeSlot == 0 ? kMetaSlot : 0));
   if (file.write(sealMetaSlot(key, header.salt, header.generation + 1, next)) != kMetaSlot) fail(file.errorString());
-  file.flush();
-  file.close();
-  syncFile(p);
-  setMtime(p, before.mtimeNs);
+  syncOpenedFile(file);
+  setOpenedMtime(file, before.mtimeNs);
 }
 
 QByteArray decryptAll(const Keys &keys, const QString &p, qint64 limit) {
@@ -497,11 +497,13 @@ QByteArray decryptAll(const Keys &keys, const QString &p, qint64 limit) {
 }
 
 void decryptToFile(const Keys &keys, const QString &p, const QString &target) {
+  auto access = mutationAccess(keys, target);
   DecryptingDevice device(std::make_shared<Keys>(keys), p);
   if (!device.open(QIODevice::ReadOnly)) fail(device.errorString());
-  TempFile temporary(path::parent(target), QStringLiteral(".room237-vault-tmp-"));
+  // The public temporary name depends only on the already-public ciphertext id, never on the original filename.
+  TempFile temporary(path::parent(target), QStringLiteral(".room237-vault-tmp-decrypt-") + sha256Hex(path::fileName(p).toUtf8()) + QLatin1Char('-'));
   QFile out(temporary.path());
-  if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) fail(out.errorString());
+  if (!openFile(out, temporary.path(), QIODevice::WriteOnly | QIODevice::Truncate)) fail(out.errorString());
   QCryptographicHash hasher(QCryptographicHash::Sha256);
   for (;;) {
     QByteArray chunk = device.read(kChunkSize);
@@ -525,7 +527,7 @@ DecryptingDevice::~DecryptingDevice() {
 bool DecryptingDevice::open(OpenMode mode) {
   if (mode & WriteOnly) return false;
   file_ = std::make_unique<QFile>(path_);
-  if (!file_->open(QIODevice::ReadOnly)) {
+  if (!openFile(*file_, path_, QIODevice::ReadOnly)) {
     setErrorString(file_->errorString());
     return false;
   }

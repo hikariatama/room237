@@ -18,16 +18,15 @@
 namespace core::maintenance {
 
 namespace {
-void clearThumbnailFiles(const QString &thumbDir) {
-  if (!exists(thumbDir)) return;
-  auto lease = FileLock::acquire(thumb::maintenanceLockPath(thumbDir), std::chrono::seconds(readSettings().ffmpeg.timeoutSecs * 2 + 5), std::chrono::milliseconds(5));
+void clearThumbnailFiles(const Directory &album) {
+  auto directory = album.optionalChild(thumb::kThumbDir);
+  if (!directory) return;
+  auto lease = FileLock::acquireIn(*directory, path::fileName(thumb::maintenanceLockPath(thumb::kThumbDir)), std::chrono::seconds(readSettings().ffmpeg.timeoutSecs * 2 + 5), std::chrono::milliseconds(5));
   // Generators hold the lease shared, so none is running here.
-  for (const DirEntry &entry : readDir(thumbDir)) {
+  for (const DirEntry &entry : directory->entries()) {
     // The directory's own leases stay. Unleased temps from older binaries may still have an active owner.
     if ((entry.name.startsWith(QLatin1String(".room237-")) && entry.name.endsWith(QLatin1String(".lock"))) || (entry.name.startsWith(QLatin1String(".room237-thumbnail-")) && !entry.name.startsWith(thumb::kTempPrefix))) continue;
-    const QString p = path::join(thumbDir, entry.name);
-    if (entry.isDir) removeTree(p);
-    else removeFile(p);
+    directory->removeEntry(entry.name);
   }
 }
 QStringList mediaIn(const QString &album) {
@@ -41,10 +40,11 @@ QStringList mediaIn(const QString &album) {
 
 quint64 rebuildThumbnails(const QString &root) {
   if (!isDir(root)) fail(QStringLiteral("%1 is not a directory").arg(root));
+  Directory library(canonical(root));
   quint64 written = 0;
   for (const QString &album : album::walkAlbumPaths(root)) {
     const QString thumbDir = path::join(album, thumb::kThumbDir);
-    clearThumbnailFiles(thumbDir);
+    clearThumbnailFiles(library.descend(path::relative(album, root)));
     createDerivedDir(thumbDir);
     std::atomic<quint64> done {0};
     QtConcurrent::blockingMap(mediaIn(album), [&](const QString &file) {
@@ -87,6 +87,7 @@ quint64 resetDuplicates(const QString &root) {
 
 quint64 clearRoom237Artifacts(const QString &root) {
   if (!isDir(root)) fail(QStringLiteral("%1 is not a directory").arg(root));
+  Directory library(canonical(root));
   quint64 cleared = 0;
   QStringList dirs = album::walkAlbumPaths(root);
   dirs << root;
@@ -117,7 +118,7 @@ quint64 clearRoom237Artifacts(const QString &root) {
     const QString thumbDir = path::join(dir, thumb::kThumbDir);
     if (exists(thumbDir)) {
       try {
-        clearThumbnailFiles(thumbDir);
+        clearThumbnailFiles(library.descend(path::relative(dir, root)));
         ++cleared;
       } catch (const Error &e) {
         qWarning("failed to remove %s: %s", qUtf8Printable(thumbDir), qUtf8Printable(e.message()));
@@ -131,21 +132,27 @@ quint64 clearRoom237Artifacts(const QString &root) {
 // One-way import of the Tauri profile. The old profile is only read, so the old app keeps working. Every step can
 // repeat after a crash: files appear through atomic renames and the marker comes last.
 namespace {
-bool writeAtomic(const QString &target, const QByteArray &bytes) {
-  const QString temporary = path::join(path::parent(target), path::stem(target) + QStringLiteral(".migrating"));
+bool writeAtomic(const Directory &profile, const QString &name, const QByteArray &bytes) {
   try {
-    writeAll(temporary, bytes);
-    syncFile(temporary);
-    renameReplace(temporary, target);
+    profile.writeAtomic(name, bytes);
     return true;
   } catch (const Error &) {
     return false;
   }
 }
-std::optional<QJsonObject> legacyUiState(const QString &legacy) {
-  QFile file(path::join(legacy, QStringLiteral("state.json")));
-  if (!file.open(QIODevice::ReadOnly)) return std::nullopt;
-  const QJsonDocument store = QJsonDocument::fromJson(file.readAll());
+std::optional<QByteArray> readLegacy(const Directory &legacy, const QString &name) {
+  for (const DirEntry &entry : legacy.entries()) {
+    if (entry.name != name) continue;
+    if (!entry.isFile) fail(QStringLiteral("Legacy profile source is not a regular non-link file"));
+    try { return legacy.readOptionalRegular(name); }
+    catch (const Error &) { return std::nullopt; }  // Preserve best-effort import of an unreadable regular source.
+  }
+  return std::nullopt;
+}
+std::optional<QJsonObject> legacyUiState(const Directory &legacy) {
+  const auto bytes = readLegacy(legacy, QStringLiteral("state.json"));
+  if (!bytes) return std::nullopt;
+  const QJsonDocument store = QJsonDocument::fromJson(*bytes);
   if (!store.isObject()) return std::nullopt;
   const QJsonValue inner = store.object().value(QLatin1String("room237-storage"));
   if (inner.isUndefined()) return std::nullopt;
@@ -167,21 +174,22 @@ MigrationOutcome migrateProfile(const QString &profile, const QString &legacy) {
     createDirs(profile);
   } catch (const Error &) {
   }
+  const QString realProfile = canonical(profile), realLegacy = canonical(legacy);
+  if (!qaPathAllowed(realProfile) || !qaPathAllowed(realLegacy)) fail(QStringLiteral("QA fence refused profile migration"));
+  Directory target(realProfile), source(realLegacy);
   MigrationOutcome outcome{MigrationOutcome::Imported};
   const QString settingsTarget = path::join(profile, QStringLiteral("settings.json"));
   if (!exists(settingsTarget)) {
     // Corrupt settings stay behind: the core reports them instead of silently losing privacy flags.
-    QFile source(path::join(legacy, QStringLiteral("settings.json")));
-    if (source.open(QIODevice::ReadOnly)) {
-      const QByteArray bytes = source.readAll();
-      if (QJsonDocument::fromJson(bytes).isObject() && writeAtomic(settingsTarget, bytes)) outcome.settings = true;
+    if (const auto bytes = readLegacy(source, QStringLiteral("settings.json"))) {
+      if (QJsonDocument::fromJson(*bytes).isObject() && writeAtomic(target, QStringLiteral("settings.json"), *bytes)) outcome.settings = true;
     }
   }
   const QString stateTarget = path::join(profile, QStringLiteral("ui-state.json"));
   if (!exists(stateTarget))
-    if (const auto state = legacyUiState(legacy)) outcome.state = writeAtomic(stateTarget, QJsonDocument(*state).toJson(QJsonDocument::Indented));
+    if (const auto state = legacyUiState(source)) outcome.state = writeAtomic(target, QStringLiteral("ui-state.json"), QJsonDocument(*state).toJson(QJsonDocument::Indented));
   const QJsonObject record{{QStringLiteral("source"), legacy}, {QStringLiteral("settings"), outcome.settings}, {QStringLiteral("state"), outcome.state}};
-  writeAtomic(marker, QJsonDocument(record).toJson(QJsonDocument::Compact));
+  writeAtomic(target, QStringLiteral("migration-tauri.json"), QJsonDocument(record).toJson(QJsonDocument::Compact));
   return outcome;
 }
 

@@ -57,7 +57,10 @@ ProcessResult runProcess(const QString &program, const QStringList &arguments, i
 // As above, and fails with the process's standard error when it does not exit successfully.
 ProcessResult runChecked(const QString &program, const QStringList &arguments, int timeoutMs);
 // Streams `input` to the process's standard input (FFmpeg reads "pipe:0"), so plaintext never touches the disk.
-ProcessResult runWithInput(const QString &program, const QStringList &arguments, QIODevice &input, int timeoutMs);
+ProcessResult runWithInput(const QString &program, const QStringList &arguments, QIODevice &input, int timeoutMs, qint64 stdoutLimit = 64 << 20);
+// Complete binary stdout or an error, never a diagnostic-prefix truncation. The caller supplies its existing
+// consumer budget (64 MiB for cached WebP previews, 1 GiB for the display PNG fallback).
+ProcessResult runBinaryProcess(const QString &program, const QStringList &arguments, int timeoutMs, qint64 stdoutLimit, QIODevice *input = nullptr, int startTimeoutMs = 30000);
 struct FfmpegSettings;
 QStringList ffmpegTuning(bool isVideo);  // -hwaccel and -threads from the current settings.
 QStringList ffmpegTuning(bool isVideo, const FfmpegSettings &settings);

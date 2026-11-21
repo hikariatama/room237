@@ -1,4 +1,5 @@
 #include "thumb.h"
+#include "file_access.h"
 
 #include "album_tree.h"
 #include "constants.h"
@@ -48,7 +49,7 @@ QStringList scaleFilter(quint32 maxDim) { return {QStringLiteral("-vf"), QString
 
 // This output shares the original decode with the regular preview.
 QStringList blurOutput(const QString &output) {
-  return {QStringLiteral("-map"), QStringLiteral("0:v:0"), QStringLiteral("-vf"), QStringLiteral("scale=16:16,format=yuv420p"), QStringLiteral("-frames:v"), QStringLiteral("1"), QStringLiteral("-an"), QStringLiteral("-c:v"), QStringLiteral("libwebp"), QStringLiteral("-q:v"), QStringLiteral("20"), QStringLiteral("-compression_level"), QStringLiteral("0"), output};
+  return {QStringLiteral("-map"), QStringLiteral("0:v:0"), QStringLiteral("-vf"), QStringLiteral("scale=16:16,format=yuv420p"), QStringLiteral("-frames:v"), QStringLiteral("1"), QStringLiteral("-an"), QStringLiteral("-c:v"), QStringLiteral("libwebp"), QStringLiteral("-q:v"), QStringLiteral("20"), QStringLiteral("-compression_level"), QStringLiteral("0"), QStringLiteral("-f"), QStringLiteral("webp"), decoderPath(output, true)};
 }
 
 bool runFfmpeg(const QStringList &args, const AdvancedSettings &settings, const QString &what, const QString &input, const QString &output) {
@@ -79,15 +80,17 @@ bool generateImageThumbnail(const QString &input, const QString &output, const Q
     }
   }
   QStringList args = tuning(false, settings);
-  args << QStringLiteral("-i") << input << QStringLiteral("-y") << QStringLiteral("-frames:v") << QStringLiteral("1") << scaleFilter(settings.thumbnails.maxDim) << QStringLiteral("-c:v") << QStringLiteral("libwebp") << QStringLiteral("-q:v")
-       << QString::number(settings.thumbnails.imageWebpQuality) << QStringLiteral("-compression_level") << QString::number(settings.thumbnails.imageWebpCompressionLevel) << output << blurOutput(blurOutputPath);
+  args << QStringLiteral("-i") << decoderPath(input) << QStringLiteral("-y") << QStringLiteral("-frames:v") << QStringLiteral("1") << scaleFilter(settings.thumbnails.maxDim) << QStringLiteral("-c:v") << QStringLiteral("libwebp") << QStringLiteral("-q:v")
+       << QString::number(settings.thumbnails.imageWebpQuality) << QStringLiteral("-compression_level") << QString::number(settings.thumbnails.imageWebpCompressionLevel)
+       << QStringLiteral("-f") << QStringLiteral("webp") << decoderPath(output, true) << blurOutput(blurOutputPath);
   return runFfmpeg(args, settings, QStringLiteral("thumb image"), input, output);
 }
 
 bool generateVideoThumbnailAt(const QString &input, const QString &output, const QString &blurOutputPath, const AdvancedSettings &settings, float seek) {
   DecodePermit permit;
   QStringList args = tuning(true, settings);
-  args << QStringLiteral("-ss") << QString::asprintf("%.3f", double(seek)) << QStringLiteral("-i") << input << QStringLiteral("-y") << QStringLiteral("-frames:v") << QStringLiteral("1") << scaleFilter(settings.thumbnails.maxDim) << output << blurOutput(blurOutputPath);
+  args << QStringLiteral("-ss") << QString::asprintf("%.3f", double(seek)) << QStringLiteral("-i") << decoderPath(input) << QStringLiteral("-y") << QStringLiteral("-frames:v") << QStringLiteral("1") << scaleFilter(settings.thumbnails.maxDim)
+       << QStringLiteral("-f") << QStringLiteral("webp") << decoderPath(output, true) << blurOutput(blurOutputPath);
   const bool ok = runFfmpeg(args, settings, QStringLiteral("thumb video"), input, output);
   return ok && stat(output).size > 0;
 }
@@ -118,7 +121,7 @@ QString backfillBlurPreview(const QString &thumb, const AdvancedSettings &settin
   TempFile temporary(dir, kTempPrefix, QStringLiteral(".webp"));
   DecodePermit permit;
   QStringList args = tuning(false, settings);
-  args << QStringLiteral("-y") << QStringLiteral("-i") << thumb << blurOutput(temporary.path());
+  args << QStringLiteral("-y") << QStringLiteral("-i") << decoderPath(thumb) << blurOutput(temporary.path());
   if (!runProcess(ffmpegPath(), args, int(settings.ffmpeg.timeoutSecs * 1000)).success) fail(QStringLiteral("Blur preview generation failed"));
   return readBlurPreview(temporary.path());
 }
@@ -147,7 +150,7 @@ QString sourceHash(const QString &path) {
   if (const auto keys = vault::keysFor(path); keys && vault::isEncryptedFile(path)) return QStringLiteral("vault:") + toHex(vault::readMeta(*keys, path).sha256);
   Budget::Permit permit(sourceReaders);
   QFile file(path);
-  if (!file.open(QIODevice::ReadOnly)) fail(file.errorString());
+  if (!openFile(file, path, QIODevice::ReadOnly)) fail(file.errorString());
   QCryptographicHash hasher(QCryptographicHash::Sha256);
   QByteArray buffer;
   while (!(buffer = file.read(64 * 1024)).isEmpty()) hasher.addData(buffer);

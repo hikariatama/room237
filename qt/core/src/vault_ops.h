@@ -23,6 +23,8 @@ void lockAll();
 void encrypt(const QString &root);
 // Restores every file of the root to its original name and content and removes the vault.
 void decrypt(const QString &root);
+// Tests synchronize destruction/restart with release of the pass's handles, after its final progress notification.
+bool backgroundPassActive(const QString &root);
 // A new second factor for this device after a fingerprint change or on another computer, unlocked with the recovery key.
 void addFactor(const QString &root, const QString &kind, const QString &reason, const QString &pin);
 // Whether `password` opens the vault; for confirmations before removing encryption.

@@ -1,6 +1,7 @@
 #include "xattr.h"
 
 #include "fs.h"
+#include "file_access.h"
 
 #include <QFile>
 
@@ -59,6 +60,7 @@ template <typename Get> Result readLoop(Get get) {
 }  // namespace
 
 Result get(const QString &path, const char *name) {
+  if (auto *view = FileAccess::current(path)) { auto file = view->open(path, QIODevice::ReadOnly); return OpenFile(file->handle()).get(name); }
   const QByteArray p = native(path);
 #ifdef Q_OS_MACOS
   return readLoop([&](char *buffer, size_t size) { return getxattr(p.constData(), name, buffer, size, 0, XATTR_NOFOLLOW); });
@@ -67,6 +69,7 @@ Result get(const QString &path, const char *name) {
 #endif
 }
 void set(const QString &path, const char *name, const QByteArray &value) {
+  if (auto *view = FileAccess::current(path)) { auto file = view->open(path, QIODevice::ReadOnly); return OpenFile(file->handle()).set(name, value); }
   const QByteArray p = native(path);
 #ifdef Q_OS_MACOS
   const int rc = setxattr(p.constData(), name, value.constData(), size_t(value.size()), 0, XATTR_NOFOLLOW);
@@ -76,6 +79,7 @@ void set(const QString &path, const char *name, const QByteArray &value) {
   if (rc != 0) fail(errnoText(errno));
 }
 void remove(const QString &path, const char *name) {
+  if (auto *view = FileAccess::current(path)) { auto file = view->open(path, QIODevice::ReadOnly); return OpenFile(file->handle()).remove(name); }
   const QByteArray p = native(path);
 #ifdef Q_OS_MACOS
   const int rc = removexattr(p.constData(), name, XATTR_NOFOLLOW);
@@ -85,27 +89,37 @@ void remove(const QString &path, const char *name) {
   if (rc != 0 && errno != kNoAttr) fail(errnoText(errno));
 }
 QStringList list(const QString &path) {
+  std::shared_ptr<QFile> file;
+  if (auto *view = FileAccess::current(path)) file = view->open(path, QIODevice::ReadOnly);
   const QByteArray p = native(path);
 #ifdef Q_OS_MACOS
-  ssize_t size = listxattr(p.constData(), nullptr, 0, XATTR_NOFOLLOW);
+  ssize_t size = file ? flistxattr(file->handle(), nullptr, 0, 0) : listxattr(p.constData(), nullptr, 0, XATTR_NOFOLLOW);
 #else
-  ssize_t size = llistxattr(p.constData(), nullptr, 0);
+  ssize_t size = file ? flistxattr(file->handle(), nullptr, 0) : llistxattr(p.constData(), nullptr, 0);
 #endif
-  if (size <= 0) return {};
+  if (size < 0) fail(errnoText(errno));
+  if (size == 0) return {};
   QByteArray buffer(qsizetype(size), Qt::Uninitialized);
 #ifdef Q_OS_MACOS
-  size = listxattr(p.constData(), buffer.data(), size_t(buffer.size()), XATTR_NOFOLLOW);
+  size = file ? flistxattr(file->handle(), buffer.data(), size_t(buffer.size()), 0) : listxattr(p.constData(), buffer.data(), size_t(buffer.size()), XATTR_NOFOLLOW);
 #else
-  size = llistxattr(p.constData(), buffer.data(), size_t(buffer.size()));
+  size = file ? flistxattr(file->handle(), buffer.data(), size_t(buffer.size())) : llistxattr(p.constData(), buffer.data(), size_t(buffer.size()));
 #endif
   QStringList names;
-  if (size <= 0) return names;
+  if (size < 0) fail(errnoText(errno));
+  if (size == 0) return names;
   for (const QByteArray &name : buffer.left(qsizetype(size)).split('\0'))
     if (!name.isEmpty()) names << QString::fromUtf8(name);
   return names;
 }
 
 OpenFile::OpenFile(const QString &path) {
+  if (auto *view = FileAccess::current(path)) {
+    auto file = view->open(path, QIODevice::ReadOnly);
+    fd_ = fcntl(file->handle(), F_DUPFD_CLOEXEC, 3);
+    if (fd_ < 0) fail(errnoText(errno));
+    return;
+  }
 #ifdef Q_OS_MACOS
   const int flags = O_SYMLINK;
 #else
@@ -114,6 +128,10 @@ OpenFile::OpenFile(const QString &path) {
   const QByteArray p = native(path);
   fd_ = ::open(p.constData(), O_RDONLY | flags | O_CLOEXEC);
   if (fd_ < 0 && (errno == EACCES || errno == EPERM)) fd_ = ::open(p.constData(), O_WRONLY | flags | O_CLOEXEC);
+  if (fd_ < 0) fail(errnoText(errno));
+}
+OpenFile::OpenFile(int descriptor) {
+  fd_ = fcntl(descriptor, F_DUPFD_CLOEXEC, 3);
   if (fd_ < 0) fail(errnoText(errno));
 }
 OpenFile::~OpenFile() {
@@ -176,16 +194,28 @@ static QString stream(const QString &path, const char *name) {
   return path + QLatin1Char(':') + stem;
 }
 Result get(const QString &path, const char *name) {
+  std::shared_ptr<QFile> admitted;
+  if (auto *view = FileAccess::current(path)) admitted = view->open(path, QIODevice::ReadOnly);
   QFile file(stream(path, name));
   Result result;
   if (!file.open(QIODevice::ReadOnly)) return result;
   result.value = file.readAll();
   return result;
 }
-void set(const QString &path, const char *name, const QByteArray &value) { writeAll(stream(path, name), value); }
-void remove(const QString &path, const char *name) { QFile::remove(stream(path, name)); }
+void set(const QString &path, const char *name, const QByteArray &value) {
+  std::shared_ptr<QFile> admitted;
+  if (auto *view = FileAccess::current(path)) admitted = view->open(path, QIODevice::ReadOnly);
+  QFile file(stream(path, name));
+  if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) || file.write(value) != value.size()) fail(file.errorString());
+}
+void remove(const QString &path, const char *name) {
+  std::shared_ptr<QFile> admitted;
+  if (auto *view = FileAccess::current(path)) admitted = view->open(path, QIODevice::ReadOnly);
+  QFile::remove(stream(path, name));
+}
 QStringList list(const QString &) { return {}; }
 OpenFile::OpenFile(const QString &) { fail(QStringLiteral("Unsupported on this platform")); }
+OpenFile::OpenFile(int) { fail(QStringLiteral("Descriptor xattrs are unsupported on this platform")); }
 OpenFile::~OpenFile() = default;
 Result OpenFile::get(const char *) const { return {}; }
 void OpenFile::set(const char *, const QByteArray &) const {}

@@ -53,8 +53,17 @@ key derived from it stays in memory until the app quits, so unlocking after a lo
 which systemd's udev rules grant to the logged-in user.
 
 QA builds also offer a `test` factor without a prompt, for the integration suites. `core/src/vault.h` describes the
-file formats; `core/src/vault_ops.h` the commands. Removing the encryption restores every name, content, modification
-time and extended attribute and deletes the vault file.
+file formats; `core/src/vault_ops.h` the commands. Each selected root is initialized separately with its own master key. Vault state and recovery journals live inside
+that root; no profile directory list grants encryption or unlocks another root. The active key belongs to one root;
+unlocking another root releases the previous active key. Setup and conversion hold an exclusive
+root lease, released by the OS on process exit. Interrupted operations resume on unlock, including interrupted removal
+of encryption. Move journals inside a vault are authenticated and encrypted. Unreadable or damaged journals stop the
+operation and remain on disk.
+
+Removing encryption restores names, content, modification times and extended attributes before removing ciphertext
+and the vault file. If attributes cannot fit the encrypted metadata slot, conversion stops with the original retained.
+If attribute restoration fails, ciphertext and the journal remain for retry. An incomplete encryption keeps legacy
+metadata until every album database has migrated and been sealed.
 
 ## Run
 

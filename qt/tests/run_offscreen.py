@@ -176,6 +176,8 @@ def main():
                 payload = case / 'offscreen-n1.update.tar.gz'
                 with tarfile.open(payload, 'w:gz') as tar:
                     tar.add(staged, arcname='.')
+            release = json.loads((work / 'RELEASE.json').read_text())
+            env.update(ROOM237_TEST_N=release['version'], ROOM237_TEST_N1=release['n1_version'])
             command = [py, TESTS / 'test_update.py', update_platform, w, '-', source / 'qt/packaging/sign_update.py', install_n, payload, '--fixture', fixture / 'plain.jpg']
         elif name == 'migration':
             if a.platform == 'linux':

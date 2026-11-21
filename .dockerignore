@@ -1,0 +1,7 @@
+*
+!Dockerfile
+!nginx.conf
+!landing/
+!landing/**
+!smoke/
+!smoke/**

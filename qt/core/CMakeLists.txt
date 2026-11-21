@@ -88,8 +88,8 @@ if(UNIX AND NOT APPLE)
 endif()
 set(ROOM237_CORE_SRC
   src/album.cpp src/album_db.cpp src/album_tree.cpp src/catalog.cpp src/clipboard.cpp src/constants.cpp src/db.cpp
-  src/disk_duplicates.cpp src/duplicates.cpp src/entry.cpp src/fs.cpp src/host.cpp src/image_hash.cpp src/json.cpp
-  src/maintenance.cpp src/media_delete.cpp src/media_move.cpp src/media_probe.cpp src/metadata.cpp src/preload.cpp
+  src/disk_duplicates.cpp src/duplicates.cpp src/entry.cpp src/fs.cpp src/safe_fs.cpp src/file_access.cpp src/sqlite_access.cpp src/host.cpp src/image_hash.cpp src/json.cpp
+  src/maintenance.cpp src/directory_move.cpp src/media_delete.cpp src/media_move.cpp src/media_probe.cpp src/metadata.cpp src/preload.cpp
   src/protocol.cpp src/settings.cpp src/thumb.cpp src/update.cpp src/util.cpp src/vault.cpp src/vault_ops.cpp src/factors.cpp src/factor_other.cpp src/webp.cpp src/xattr.cpp)
 if(WIN32)
   list(APPEND ROOM237_CORE_SRC src/factor_windows.cpp)
@@ -137,7 +137,7 @@ if(ROOM237_FIDO)
   target_link_libraries(room237_core PRIVATE room237_fido)
 endif()
 if(WIN32)
-  target_link_libraries(room237_core PRIVATE runtimeobject)
+  target_link_libraries(room237_core PRIVATE runtimeobject advapi32)
 endif()
 if(UNIX AND NOT APPLE AND ROOM237_TPM)
   target_compile_definitions(room237_core PRIVATE ROOM237_TPM)
@@ -170,6 +170,6 @@ if(ROOM237_CORE_TESTS)
   add_executable(room237_core_tests tests/core_tests.cpp)
   set_target_properties(room237_core_tests PROPERTIES AUTOMOC ON)
   target_compile_definitions(room237_core_tests PRIVATE ROOM237_TESTDATA="${CMAKE_CURRENT_SOURCE_DIR}/testdata")
-  target_link_libraries(room237_core_tests PRIVATE room237_core room237_zlib Qt6::Test)
+  target_link_libraries(room237_core_tests PRIVATE room237_core room237_zlib room237_sqlite Qt6::Test)
   add_test(NAME room237_core_tests COMMAND room237_core_tests)
 endif()

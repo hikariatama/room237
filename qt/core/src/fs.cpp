@@ -1,4 +1,5 @@
 #include "fs.h"
+#include "file_access.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -221,6 +222,7 @@ static void addBirth(const QString &p, bool follow, FileInfo &info) {
 }
 #endif
 FileInfo stat(const QString &p) {
+  if (auto *view = FileAccess::current(p)) return view->info(p, true);
   struct stat st {};
   if (::stat(native(p).constData(), &st) != 0) return {};
   FileInfo info = fromStat(st);
@@ -230,6 +232,7 @@ FileInfo stat(const QString &p) {
   return info;
 }
 FileInfo lstat(const QString &p) {
+  if (auto *view = FileAccess::current(p)) return view->info(p);
   struct stat st {};
   if (::lstat(native(p).constData(), &st) != 0) return {};
   FileInfo info = fromStat(st);
@@ -268,8 +271,8 @@ static FileInfo statWindows(const QString &p, bool follow) {
   info.readOnly = data.dwFileAttributes & FILE_ATTRIBUTE_READONLY;
   return info;
 }
-FileInfo stat(const QString &p) { return statWindows(p, true); }
-FileInfo lstat(const QString &p) { return statWindows(p, false); }
+FileInfo stat(const QString &p) { if (auto *view = FileAccess::current(p)) return view->info(p, true); return statWindows(p, true); }
+FileInfo lstat(const QString &p) { if (auto *view = FileAccess::current(p)) return view->info(p); return statWindows(p, false); }
 #endif
 
 bool isFile(const QString &p) { return stat(p).isFile; }
@@ -278,6 +281,12 @@ bool exists(const QString &p) { return stat(p).exists; }
 bool entryExists(const QString &p) { return lstat(p).exists; }
 
 std::optional<QString> tryCanonical(const QString &p) {
+  if (auto *view = FileAccess::current(p)) {
+    const auto info = view->info(p);
+    if (!info.exists || info.isSymlink) return std::nullopt;
+    view->directory(info.isDir ? p : path::parent(p))->nativeHandle();
+    return view->canonicalSpelling(p);
+  }
 #ifndef Q_OS_WIN
   char *resolved = realpath(native(p).constData(), nullptr);
   if (!resolved) return std::nullopt;
@@ -309,6 +318,7 @@ QString canonical(const QString &p) {
 }
 
 QString directoryId(const QString &p) {
+  if (auto *view = FileAccess::current(p)) return view->directory(p)->identity();
   const FileInfo info = lstat(p);
   if (!info.exists) fail(QStringLiteral("No such file or directory (os error 2)"));
   if (!info.isDir) fail(QStringLiteral("Move album is not a regular directory"));
@@ -327,15 +337,23 @@ QString directoryId(const QString &p) {
 
 QByteArray readAll(const QString &p, qint64 limit) {
   QFile file(p);
-  if (!file.open(QIODevice::ReadOnly)) fail(file.errorString());
+  if (!openFile(file, p, QIODevice::ReadOnly)) fail(file.errorString());
   return limit < 0 ? file.readAll() : file.read(limit);
 }
 void writeAll(const QString &p, const QByteArray &bytes) {
   QFile file(p);
-  if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) fail(QStringLiteral("%1: %2").arg(p, file.errorString()));
+  if (!openFile(file, p, QIODevice::WriteOnly | QIODevice::Truncate)) fail(QStringLiteral("%1: %2").arg(p, file.errorString()));
   if (file.write(bytes) != bytes.size()) fail(file.errorString());
 }
 void removeFile(const QString &p) {
+  if (auto *view = FileAccess::current(p)) {
+    auto opened = view->pinned(p);
+    if (opened && !opened->isOpen()) { view->unpin(p); opened.reset(); }
+    const auto expected = opened ? openedFileInfo(*opened) : FileInfo{};
+    if (!view->directory(path::parent(p))->removeFileIfPresent(path::fileName(p), opened ? &expected : nullptr, opened.get())) fail(QStringLiteral("No such file or directory (os error 2)"));
+    view->unpin(p);
+    return;
+  }
 #ifndef Q_OS_WIN
   if (::unlink(native(p).constData()) != 0) fail(errnoText(errno));
 #else
@@ -343,6 +361,15 @@ void removeFile(const QString &p) {
 #endif
 }
 bool removeFileIfExists(const QString &p) {
+  if (auto *view = FileAccess::current(p)) {
+    if (!view->info(path::parent(p)).isDir) return false;
+    auto opened = view->pinned(p);
+    if (opened && !opened->isOpen()) { view->unpin(p); opened.reset(); }
+    const auto expected = opened ? openedFileInfo(*opened) : FileInfo{};
+    const bool removed = view->directory(path::parent(p))->removeFileIfPresent(path::fileName(p), opened ? &expected : nullptr, opened.get());
+    if (removed) view->unpin(p);
+    return removed;
+  }
 #ifndef Q_OS_WIN
   if (::unlink(native(p).constData()) == 0) return true;
   if (errno == ENOENT) return false;
@@ -355,6 +382,7 @@ bool removeFileIfExists(const QString &p) {
 #endif
 }
 void removeTree(const QString &p) {
+  if (auto *view = FileAccess::current(p)) return view->directory(path::parent(p))->removeEntry(path::fileName(p));
   const FileInfo info = lstat(p);
   if (!info.exists) fail(QStringLiteral("No such file or directory (os error 2)"));
   if (!info.isDir) return removeFile(p);
@@ -370,6 +398,12 @@ void removeTree(const QString &p) {
 #endif
 }
 void createDir(const QString &p) {
+  if (auto *view = FileAccess::current(p)) {
+    auto parent = view->directory(path::parent(p));
+    if (parent->info(path::fileName(p)).exists) fail(QStringLiteral("File exists (os error 17)"));
+    parent->ensureChild(path::fileName(p));
+    return;
+  }
 #ifndef Q_OS_WIN
   if (::mkdir(native(p).constData(), 0777) != 0) {
     const int error = errno;
@@ -385,6 +419,12 @@ void createDir(const QString &p) {
 #endif
 }
 void createDirs(const QString &p) {
+  if (auto *view = FileAccess::current(p)) {
+    if (isDir(p)) return;
+    createDirs(path::parent(p));
+    view->directory(path::parent(p))->ensureChild(path::fileName(p));
+    return;
+  }
   if (isDir(p)) return;
   if (!QDir().mkpath(p)) fail(QStringLiteral("Cannot create %1").arg(p));
 }
@@ -397,6 +437,7 @@ void createDerivedDir(const QString &p) {
   }
 }
 std::vector<DirEntry> readDir(const QString &p) {
+  if (auto *view = FileAccess::current(p)) return view->directory(p)->entries();
   std::vector<DirEntry> out;
 #ifndef Q_OS_WIN
   DIR *dir = opendir(native(p).constData());
@@ -442,6 +483,7 @@ QStringList listDir(const QString &p) {
   return names;
 }
 void syncDir(const QString &p) {
+  if (auto *view = FileAccess::current(p)) return view->directory(p)->sync();
 #ifndef Q_OS_WIN
   const int fd = ::open(native(p).constData(), O_RDONLY);
   if (fd < 0) fail(errnoText(errno));
@@ -454,6 +496,7 @@ void syncDir(const QString &p) {
 #endif
 }
 void syncFile(const QString &p) {
+  if (auto *view = FileAccess::current(p)) { auto file = view->open(p, QIODevice::ReadWrite | QIODevice::ExistingOnly); syncOpenedFile(*file); return; }
 #ifndef Q_OS_WIN
   const int fd = ::open(native(p).constData(), O_RDONLY);
   if (fd < 0) fail(errnoText(errno));
@@ -475,6 +518,11 @@ void syncFile(const QString &p) {
 }
 
 bool renameNoClobber(const QString &source, const QString &target, QString *error) {
+  auto *from = FileAccess::current(source), *to = FileAccess::current(target);
+  if (from || to) {
+    if (!from || !to) { if (error) *error = QStringLiteral("Rename crosses an unadmitted filesystem boundary"); return false; }
+    return from->directory(path::parent(source))->renameTo(path::fileName(source), *to->directory(path::parent(target)), path::fileName(target), false, error);
+  }
 #if defined(Q_OS_MACOS)
   if (renamex_np(native(source).constData(), native(target).constData(), RENAME_EXCL) == 0) return true;
   if (error) *error = errnoText(errno);
@@ -490,6 +538,13 @@ bool renameNoClobber(const QString &source, const QString &target, QString *erro
 #endif
 }
 void renameReplace(const QString &source, const QString &target) {
+  auto *from = FileAccess::current(source), *to = FileAccess::current(target);
+  if (from || to) {
+    if (!from || !to) fail(QStringLiteral("Rename crosses an unadmitted filesystem boundary"));
+    QString error;
+    if (!from->directory(path::parent(source))->renameTo(path::fileName(source), *to->directory(path::parent(target)), path::fileName(target), true, &error)) fail(error);
+    return;
+  }
 #ifndef Q_OS_WIN
   if (::rename(native(source).constData(), native(target).constData()) != 0) fail(errnoText(errno));
 #else
@@ -504,6 +559,7 @@ void atomicWrite(const QString &p, const QByteArray &bytes) {
   atomicWriteExisting(p, bytes);
 }
 void atomicWriteExisting(const QString &p, const QByteArray &bytes) {
+  if (auto *view = FileAccess::current(p)) return view->directory(path::parent(p))->writeAtomic(path::fileName(p), bytes);
   const QString dir = path::parent(p);
   if (dir.isEmpty()) fail(QStringLiteral("Missing parent directory"));
   TempFile temp(dir, QStringLiteral(".tmp"));
@@ -535,6 +591,19 @@ void copyFile(const QString &source, const QString &target) {
 }
 
 TempFile::TempFile(const QString &dir, const QString &prefix, const QString &suffix) {
+  if (auto *view = FileAccess::current(dir)) {
+    access_ = view;
+    const QString name = prefix + randomName(16);
+    auto parent = view->directory(dir);
+    directory_ = std::make_shared<Directory>(parent->privateChild(name));
+    stagingPath_ = path::join(dir, name);
+    view->bindDirectory(stagingPath_, directory_);
+    path_ = path::join(stagingPath_, QStringLiteral("data") + suffix);
+    boundPath_ = path_;
+    file_ = directory_->openRegular(path::fileName(path_), QIODevice::ReadWrite | QIODevice::NewOnly);
+    view->bind(path_, file_);
+    return;
+  }
   for (int attempt = 0; attempt < 64; ++attempt) {
     const QString candidate = path::join(dir, prefix + randomName() + suffix);
 #ifndef Q_OS_WIN
@@ -558,6 +627,29 @@ TempFile::TempFile(const QString &dir, const QString &prefix, const QString &suf
   fail(QStringLiteral("Cannot create a temporary file in %1").arg(dir));
 }
 TempFile::~TempFile() {
+  if (file_) {
+    access_->unpin(boundPath_);
+    if (!path_.isEmpty()) {
+      try {
+        const auto named = directory_->info(path::fileName(path_)), opened = openedFileInfo(*file_);
+        // An ambiguous publication/cleanup retains all entries. Never unlink an exchanged named temporary.
+        if (named.exists && named.dev == opened.dev && named.ino == opened.ino) {
+#ifdef Q_OS_WIN
+          access_->releaseReaders(opened);
+#endif
+          directory_->removeFileIfPresent(path::fileName(path_), &opened);
+        }
+      } catch (...) {}
+    }
+    try {
+      if (directory_->entries().empty()) {
+        auto parent = access_->directory(path::parent(stagingPath_));
+        parent->removeEmpty(path::fileName(stagingPath_), directory_.get());
+      }
+    } catch (...) {}
+    access_->unbindDirectory(stagingPath_);
+    return;
+  }
   if (!path_.isEmpty()) {
     try {
       removeFileIfExists(path_);
@@ -566,23 +658,79 @@ TempFile::~TempFile() {
   }
 }
 void TempFile::write(const QByteArray &bytes) {
+  if (file_) { if (!file_->seek(file_->size()) || file_->write(bytes) != bytes.size()) fail(file_->errorString()); return; }
   QFile file(path_);
   if (!file.open(QIODevice::WriteOnly | QIODevice::Append)) fail(file.errorString());
   if (file.write(bytes) != bytes.size()) fail(file.errorString());
 }
-void TempFile::sync() { syncFile(path_); }
-qint64 TempFile::size() const { return qint64(stat(path_).size); }
+void TempFile::sync() { if (file_) syncOpenedFile(*file_); else syncFile(path_); }
+qint64 TempFile::size() const { return file_ ? file_->size() : qint64(stat(path_).size); }
 void TempFile::persist(const QString &target) {
+  if (file_) {
+    auto to = access_->directory(path::parent(target));
+    const auto expected = openedFileInfo(*file_);
+    access_->checkpoint(QStringLiteral("before_publication"), path_, target);
+#ifdef Q_OS_WIN
+    access_->releaseReaders(expected);
+    file_ = directory_->openRegular(path::fileName(path_), QIODevice::ReadWrite | QIODevice::ExistingOnly, true);
+    const auto reopened = openedFileInfo(*file_);
+    if (reopened.dev != expected.dev || reopened.ino != expected.ino || reopened.size != expected.size || reopened.mtimeNs != expected.mtimeNs)
+      fail(QStringLiteral("Temporary entry changed during publication claim; preserving it"));
+    access_->bind(boundPath_, file_);
+#endif
+    QString error;
+    // The staging namespace is owner-only on POSIX; Windows publication uses the original DELETE-capable handle.
+    directory_->claim(path::fileName(path_), *directory_, QStringLiteral("published"), expected, file_.get());
+    access_->checkpoint(QStringLiteral("before_private_publication"), path::join(stagingPath_, "published"), target);
+    if (!directory_->renameTo(QStringLiteral("published"), *to, path::fileName(target), true, &error, file_.get())) fail(error);
+    const auto now = to->info(path::fileName(target));
+    if (now.dev != expected.dev || now.ino != expected.ino) {
+      if (now.exists) to->claim(path::fileName(target), *directory_, "published", now);
+      fail(QStringLiteral("Published entry changed; preserved with transaction"));
+    }
+    to->sync(); directory_->sync(); access_->bindPublished(target, file_, to); path_.clear(); return;
+  }
   renameReplace(path_, target);
   path_.clear();
 }
 void TempFile::persistNoClobber(const QString &target) {
+  if (file_) {
+    auto to = access_->directory(path::parent(target));
+    const auto expected = openedFileInfo(*file_);
+    access_->checkpoint(QStringLiteral("before_publication"), path_, target);
+#ifdef Q_OS_WIN
+    access_->releaseReaders(expected);
+    file_ = directory_->openRegular(path::fileName(path_), QIODevice::ReadWrite | QIODevice::ExistingOnly, true);
+    const auto reopened = openedFileInfo(*file_);
+    if (reopened.dev != expected.dev || reopened.ino != expected.ino || reopened.size != expected.size || reopened.mtimeNs != expected.mtimeNs)
+      fail(QStringLiteral("Temporary entry changed during publication claim; preserving it"));
+    access_->bind(boundPath_, file_);
+#endif
+    QString error;
+    directory_->claim(path::fileName(path_), *directory_, QStringLiteral("published"), expected, file_.get());
+    access_->checkpoint(QStringLiteral("before_private_publication"), path::join(stagingPath_, "published"), target);
+    if (!directory_->renameTo(QStringLiteral("published"), *to, path::fileName(target), false, &error, file_.get())) fail(error);
+    const auto now = to->info(path::fileName(target));
+    if (now.dev != expected.dev || now.ino != expected.ino) {
+      if (now.exists) to->claim(path::fileName(target), *directory_, "published", now);
+      fail(QStringLiteral("Published entry changed; preserved with transaction"));
+    }
+    to->sync(); directory_->sync(); access_->bindPublished(target, file_, to); path_.clear(); return;
+  }
   QString error;
   if (!renameNoClobber(path_, target, &error)) fail(error);
   path_.clear();
 }
 
 TempDir::TempDir(const QString &parent, const QString &prefix) {
+  if (auto *view = FileAccess::current(parent)) {
+    access_ = view;
+    const QString name = prefix + randomName(16);
+    directory_ = std::make_shared<Directory>(view->directory(parent)->privateChild(name));
+    path_ = path::join(parent, name);
+    view->bindDirectory(path_, directory_);
+    return;
+  }
   for (int attempt = 0; attempt < 64; ++attempt) {
     const QString candidate = path::join(parent, prefix + randomName());
     try {
@@ -596,6 +744,12 @@ TempDir::TempDir(const QString &parent, const QString &prefix) {
   fail(QStringLiteral("Cannot create a temporary directory in %1").arg(parent));
 }
 TempDir::~TempDir() {
+  if (directory_) {
+    if (!path_.isEmpty()) try {
+      access_->directory(path::parent(path_))->removeEmpty(path::fileName(path_), directory_.get());
+    } catch (...) {}
+    return;
+  }
   if (!path_.isEmpty()) {
     try {
       removeTree(path_);
@@ -620,6 +774,27 @@ FileLock::~FileLock() {
 #endif
 }
 std::unique_ptr<FileLock> FileLock::open(const QString &p) {
+  if (auto *view = FileAccess::current(p)) {
+    auto directory = view->directory(path::parent(p));
+    std::unique_ptr<FileLock> lock(new FileLock);
+    lock->directory_ = directory->impl_;
+#ifndef Q_OS_WIN
+    const int fd = ::openat(int(directory->nativeHandle()), native(path::fileName(p)).constData(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (fd < 0) fail(errnoText(errno));
+    lock->handle_ = fd;
+    struct stat st{};
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) fail(QStringLiteral("Lease is not a regular file"));
+#else
+    HANDLE handle = CreateFileW(native(p).c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_ALWAYS, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) fail(lastErrorText());
+    lock->handle_ = intptr_t(handle);
+    BY_HANDLE_FILE_INFORMATION st{};
+    if (!GetFileInformationByHandle(handle, &st) || GetFileType(handle) != FILE_TYPE_DISK ||
+        (st.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) fail(QStringLiteral("Lease is not a regular file"));
+#endif
+    return lock;
+  }
   if (lstat(p).isSymlink) fail(QStringLiteral("File lease cannot follow a symlink"));
   std::unique_ptr<FileLock> lock(new FileLock);
 #ifndef Q_OS_WIN

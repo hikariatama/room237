@@ -107,6 +107,7 @@ void openCentered(Popover *popover) {
   QWidget *host = popover->parentWidget();
   const QSize size = popover->panelRect().size();
   popover->setModalDim(true);
+  popover->setCentered(true);
   popover->openAt(QRect(host->width() / 2, (host->height() - size.height()) / 2 - 7, 1, 1), Qt::BottomEdge, Qt::AlignHCenter);
 }
 
@@ -177,15 +178,15 @@ HardeningSetup::HardeningSetup(QWidget *host, CoreClient *core, const QString &r
   auto *buttons = new QHBoxLayout;
   buttons->setSpacing(8);
   buttons->addStretch();
-  auto *cancel = new TextButton(t("common.cancel"), TextButton::Outline);
+  cancel_ = new TextButton(t("common.cancel"), TextButton::Outline);
   encrypt_ = new TextButton(t("security.encrypt"), TextButton::Primary);
   encrypt_->setIcon("lock");
-  for (TextButton *button : {cancel, encrypt_}) button->setSmall(true);
-  buttons->addWidget(cancel);
+  for (TextButton *button : {cancel_, encrypt_}) button->setSmall(true);
+  buttons->addWidget(cancel_);
   buttons->addWidget(encrypt_);
   layout->addSpacing(4);
   layout->addLayout(buttons);
-  connect(cancel, &QAbstractButton::clicked, this, &Popover::animateClose);
+  connect(cancel_, &QAbstractButton::clicked, this, &Popover::animateClose);
   connect(encrypt_, &QAbstractButton::clicked, this, &HardeningSetup::submit);
   for (QLineEdit *field : {password_, repeat_}) connect(field, &QLineEdit::returnPressed, this, &HardeningSetup::submit);
 
@@ -231,8 +232,11 @@ HardeningSetup::HardeningSetup(QWidget *host, CoreClient *core, const QString &r
   keys->addSpacing(4);
   keys->addLayout(doneRow);
   connect(reveal_, &QAbstractButton::clicked, this, [this] { showKey(!keyShown_); });
-  connect(copy, &QAbstractButton::clicked, this, [this] {
+  connect(copy, &QAbstractButton::clicked, this, [this, copy] {
     QGuiApplication::clipboard()->setText(recoveryKey_);
+    // A check for a moment confirms the copy.
+    copy->setIcon("check");
+    QTimer::singleShot(1500, copy, [copy] { copy->setIcon("copy"); });
     // The key leaves the clipboard after a minute unless something else replaced it.
     const QString copied = recoveryKey_;
     QTimer::singleShot(60000, qApp, [copied] {
@@ -355,6 +359,9 @@ void HardeningSetup::submit() {
   if (!problem.isEmpty()) return;
   encrypt_->setBusy(true);
   encrypt_->setEnabled(false);
+  // Once the core sets the root up, its recovery key is shown here: nothing closes the dialog before that.
+  cancel_->setEnabled(false);
+  setDismissOnEscape(false);
   touch_->setVisible(kinds.contains(QStringLiteral("fido2")));
   fit();
   const QJsonObject params{{QStringLiteral("root"), root_}, {QStringLiteral("password"), password}, {QStringLiteral("factors"), QJsonArray::fromStringList(kinds)}, {QStringLiteral("decoyPassword"), decoy_ ? decoy_->text() : QString()}, {QStringLiteral("reason"), t("security.prompt.setup")}, {QStringLiteral("pin"), pin_->text()}};
@@ -365,6 +372,8 @@ void HardeningSetup::submit() {
     self->encrypt_->setEnabled(true);
     self->touch_->hide();
     if (!error.isEmpty()) {
+      self->cancel_->setEnabled(true);
+      self->setDismissOnEscape(true);
       // A security key with a PIN asks for it; the field appears now.
       if (error.contains(QLatin1String("needs its PIN")) && !self->fidoPin_) {
         self->fidoPin_ = true;
@@ -390,7 +399,7 @@ void HardeningSetup::showRecoveryKey(const QString &key) {
 
 // --- Offer for a plain root ----------------------------------------------------------------------------------------
 
-EncryptOffer::EncryptOffer(QWidget *host, const QString &rootName, std::function<void()> encrypt, std::function<void()> later, std::function<void()> never) : Popover(host, DialogSurface) {
+EncryptOffer::EncryptOffer(QWidget *host, const QString &rootName, std::function<void()> encrypt, std::function<void()> later) : Popover(host, DialogSurface) {
   setDismissOnOutside(false);
   auto *layout = new QVBoxLayout(content_);
   layout->setContentsMargins(20, 20, 20, 20);
@@ -399,11 +408,9 @@ EncryptOffer::EncryptOffer(QWidget *host, const QString &rootName, std::function
   layout->addWidget(text(t("security.offer.description"), 12, QFont::Normal, "#8a8a8a"));
   auto *buttons = new QHBoxLayout;
   buttons->setSpacing(8);
-  auto *neverButton = new TextButton(t("security.offer.never"), TextButton::Ghost);
   auto *laterButton = new TextButton(t("security.offer.later"), TextButton::Outline);
   auto *encryptButton = new TextButton(t("security.encrypt"), TextButton::Primary);
-  for (TextButton *button : {neverButton, laterButton, encryptButton}) button->setSmall(true);
-  buttons->addWidget(neverButton);
+  for (TextButton *button : {laterButton, encryptButton}) button->setSmall(true);
   buttons->addStretch();
   buttons->addWidget(laterButton);
   buttons->addWidget(encryptButton);
@@ -416,9 +423,8 @@ EncryptOffer::EncryptOffer(QWidget *host, const QString &rootName, std::function
     };
   };
 #ifdef ROOM237_QA
-  choices_ = {{QStringLiteral("never"), neverButton}, {QStringLiteral("later"), laterButton}, {QStringLiteral("encrypt"), encryptButton}};
+  choices_ = {{QStringLiteral("later"), laterButton}, {QStringLiteral("encrypt"), encryptButton}};
 #endif
-  connect(neverButton, &QAbstractButton::clicked, this, choose(std::move(never)));
   connect(laterButton, &QAbstractButton::clicked, this, choose(std::move(later)));
   connect(encryptButton, &QAbstractButton::clicked, this, choose(std::move(encrypt)));
   connect(this, &Popover::closed, this, &QObject::deleteLater);
@@ -571,6 +577,10 @@ VaultUnlock::VaultUnlock(QWidget *parent, CoreClient *core) : QWidget(parent), c
   error_ = errorLabel();
   error_->setAlignment(Qt::AlignCenter);
   error_->setFixedWidth(320);
+  // An error takes the room kept for it: the screen does not jump when one appears.
+  QSizePolicy keep = error_->sizePolicy();
+  keep.setRetainSizeWhenHidden(true);
+  error_->setSizePolicy(keep);
   for (QWidget *widget : std::initializer_list<QWidget *>{password_, recoveryKey_, pin_, primary_, secondary_, error_}) form->addWidget(widget, 0, Qt::AlignHCenter);
   column->addLayout(form);
   column->addSpacing(8);
@@ -834,7 +844,8 @@ QString HardeningSetup::qaDone(const QStringList &groups) {
   checkInput_->setGroups(groups.size() == 2 ? groups : QStringList{all.value(groupA_), all.value(groupB_)});
   check();
   return checkError_->isHidden() ? QString() : checkError_->text();
-}void EncryptOffer::qaChoose(const QString &choice) {
+}
+void EncryptOffer::qaChoose(const QString &choice) {
   if (TextButton *button = choices_.value(choice)) button->click();
 }
 void VaultUnlock::qaSubmit(const QString &password, const QString &recoveryKey, bool useRecovery, bool secondary) {

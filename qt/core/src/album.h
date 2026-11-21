@@ -1,5 +1,6 @@
 #pragma once
 #include "entry.h"
+#include "metadata.h"
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -38,7 +39,7 @@ quint64 getAlbumSize(const QString &dir);
 QStringList moveMediaBatch(const QString &source, const QString &target, const QStringList &media);
 QString moveMedia(const QString &source, const QString &target, const QString &media);
 // Tests: checkpoints may throw to simulate a crash at a named phase.
-QStringList moveMediaBatchWithHook(const QString &source, const QString &target, const QStringList &media, bool moveArtifacts, const std::function<void(const QString &, const QString &, const QString &)> &checkpoint);
+QStringList moveMediaBatchWithHook(const QString &source, const QString &target, const QStringList &media, bool moveArtifacts, const std::function<void(const QString &, const QString &, const QString &)> &checkpoint, const std::vector<metadata::ObservedMedia> &expected = {});
 DetachedMediaEntry registerNewMedia(const QString &albumPath, const QString &mediaName);
 ImportResult addMediaFiles(const QString &dir, const std::vector<IncomingFile> &files);
 

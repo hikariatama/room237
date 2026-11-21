@@ -1,4 +1,5 @@
 #include "overlays.h"
+#include <QGraphicsOpacityEffect>
 #include "i18n.h"
 #include "qatrace.h"
 #include <QHBoxLayout>
@@ -176,6 +177,12 @@ PreloadOverlay::PreloadOverlay(QWidget *parent) : QWidget(parent) {
   vaultWorkers_ = new NumberSlider(1, 32, 4, t("preload.threads.encryption"), this);
   for (NumberSlider *slider : {thumbWorkers_, metaWorkers_, vaultWorkers_})
     connect(slider, &NumberSlider::valueChanged, this, [this] { emit workersChanged(thumbWorkers_->value(), metaWorkers_->value(), vaultWorkers_->value()); });
+  // The animation and the sliders fade with the screen instead of standing on the room while it fades in or out.
+  for (QWidget *child : std::initializer_list<QWidget *>{lottie_, thumbWorkers_, metaWorkers_, vaultWorkers_}) {
+    auto *effect = new QGraphicsOpacityEffect(child);
+    effect->setOpacity(0);
+    child->setGraphicsEffect(effect);
+  }
   // The room shows through blurred, and keeps changing underneath while the work goes on.
   frostTimer_.setInterval(1000);
   connect(&frostTimer_, &QTimer::timeout, this, [this] {
@@ -200,6 +207,12 @@ PreloadOverlay::PreloadOverlay(QWidget *parent) : QWidget(parent) {
   fade_.setDuration(Theme::motion(150));
   connect(&fade_, &QVariantAnimation::valueChanged, this, [this](const QVariant &v) {
     opacity_ = v.toReal();
+    for (QWidget *child : std::initializer_list<QWidget *>{lottie_, thumbWorkers_, metaWorkers_, vaultWorkers_})
+      if (auto *effect = qobject_cast<QGraphicsOpacityEffect *>(child->graphicsEffect())) {
+        // At full opacity the effect is off, so the children paint directly.
+        effect->setOpacity(opacity_);
+        effect->setEnabled(opacity_ < 1);
+      }
     update();
   });
   connect(&fade_, &QVariantAnimation::finished, this, [this] {

@@ -134,6 +134,7 @@ void GalleryModel::reload(std::function<void()> done, bool keepPages, bool inven
       for (const auto &row : rows) items.push_back(mediaFromJson(row.toObject()));
       const int total = o.value(QLatin1String("total")).toInt();
       keepSelection = inventoryUnchanged && total == total_ && pages_.contains(0) && sameInventory(pages_.value(0), items);
+      if (!keepSelection) emit aboutToReset();
       total_ = total;
       pages_.clear();
       ages_.clear();

@@ -71,6 +71,7 @@ signals:
   void geometryChanged();
   void albumsChanged();
   void reset();
+  void aboutToReset();  // A new listing replaces the items; the old ones are still there.
   void pageLoaded(int first, int last);
 private:
   void loadPage(int page);

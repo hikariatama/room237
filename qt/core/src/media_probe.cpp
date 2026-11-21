@@ -1,4 +1,5 @@
 #include "media_probe.h"
+#include "file_access.h"
 
 #include "fs.h"
 
@@ -399,7 +400,7 @@ std::optional<qint64> quickTimeCreationTime(QIODevice &in, quint64 length) {
 std::optional<qint64> quickTimeCreationTime(const QString &p) {
   if (!stat(p).isFile) return std::nullopt;
   QFile file(p);
-  if (!file.open(QIODevice::ReadOnly | QIODevice::Unbuffered)) return std::nullopt;
+  if (!openFile(file, p, QIODevice::ReadOnly | QIODevice::Unbuffered)) return std::nullopt;
   return quickTimeCreationTime(file, quint64(file.size()));
 }
 
@@ -426,7 +427,7 @@ std::optional<Exif> readExif(QIODevice &in) {
 
 std::optional<Exif> readExif(const QString &p) {
   QFile file(p);
-  if (!file.open(QIODevice::ReadOnly)) return std::nullopt;
+  if (!openFile(file, p, QIODevice::ReadOnly)) return std::nullopt;
   return readExif(file);
 }
 
