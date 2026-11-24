@@ -128,6 +128,12 @@ db::Connection open(const QString &root) {
   return conn;
 }
 
+// Changes a reconcile applies file by file; more rescan the album.
+constexpr int kIncrementalLimit = 256;
+
+// The folder's own revision and the processing settings: a listing taken under the same signature needs no rescan.
+QString scanSignature(const QString &album) { return metadata::sourceRevision(album).value_or(QString()) + QLatin1Char('|') + readSettings().processingVersion(); }
+
 QString pendingMarker(const QString &root, const QString &id) { return path::join(path::join(path::join(root, kDirectory), QStringLiteral("pending")), sha256Hex(id.toUtf8())); }
 
 void removePending(const QString &root, const QString &id, const Directory *admitted = nullptr) {
@@ -353,17 +359,20 @@ void forget(const QString &album, const QStringList &names) {
   tx.commit();
 }
 
-bool reconcileAlbum(const QString &rootDir, const QString &id) {
-  if (nestedInVault(rootDir)) return false;
-  const QString root = rootDir;
-  initialize(root);
-  const QString album = path::join(root, id);
-  if (!isDir(album)) {
-    retainAlbums(root, albumIds(root, album::walkAlbumPaths(root)));
-    return true;
-  }
-  if (!path::startsWith(canonical(album), canonical(root))) fail(QStringLiteral("Album outside library"));
-  QSet<QString> known;
+namespace {
+// How an album folder differs from its catalog rows: new or rewritten files, files gone, and nested albums.
+struct AlbumDiff {
+  QStringList updated, gone;
+  QStringList favoriteRenames;  // New names of favorites renamed outside the app: same file, same revision.
+  QSet<QString> children;
+  int seen = 0;
+  bool overflow = false;  // More than kIncrementalLimit changes: the album is scanned again instead.
+  bool empty() const { return updated.isEmpty() && gone.isEmpty(); }
+};
+
+AlbumDiff diffAlbum(const QString &root, const QString &album, const QString &id) {
+  AlbumDiff diff;
+  QSet<QString> known, present;
   {
     db::Connection conn = open(root);
     db::Statement statement = conn.prepare(QStringLiteral("SELECT name FROM media WHERE album=?1"));
@@ -374,32 +383,98 @@ bool reconcileAlbum(const QString &rootDir, const QString &id) {
   const QString database = path::join(album, QStringLiteral(".room237-metadata/album.sqlite"));
   std::optional<album_db::FileReader> reader;
   if (isFile(database)) reader.emplace(database);
-  int seen = 0;
-  bool changed = false;
-  QSet<QString> children;
   for (const DirEntry &entry : readDir(album)) {
     const QString path = path::join(album, entry.name);
     if (album::isAlbumDir(path)) {
-      children.insert(id + QLatin1Char('/') + entry.name);
+      diff.children.insert(id + QLatin1Char('/') + entry.name);
       continue;
     }
     if (!entry.isFile || !constants::isMedia(path)) continue;
     if (hidden.contains(entry.name)) continue;
-    ++seen;
-    if (!known.contains(entry.name)) {
-      changed = true;
-      break;
+    ++diff.seen;
+    present.insert(entry.name);
+    bool changed = !known.contains(entry.name);
+    if (!changed) {
+      // An entry without a stored revision is still being processed, which is not a change.
+      std::optional<QString> stored;
+      if (reader)
+        if (auto row = reader->get(entry.name)) stored = row->metaSourceRevision;
+      changed = stored && stored != metadata::sourceRevision(path);
     }
-    // An entry without a stored revision is still being processed, which is not a change.
-    std::optional<QString> stored;
-    if (reader)
-      if (auto row = reader->get(entry.name)) stored = row->metaSourceRevision;
-    if (stored && stored != metadata::sourceRevision(path)) {
-      changed = true;
-      break;
+    if (changed) {
+      diff.updated << entry.name;
+      if (diff.updated.size() > kIncrementalLimit) {
+        diff.overflow = true;
+        return diff;
+      }
     }
   }
-  if (!changed && seen == known.size()) {
+  for (const QString &name : known)
+    if (!present.contains(name)) diff.gone << name;
+  diff.overflow = diff.updated.size() + diff.gone.size() > kIncrementalLimit;
+  // A rename keeps the inode, size and modification time, which the stored revision records.
+  if (!diff.overflow && reader && !diff.gone.isEmpty() && !diff.updated.isEmpty()) {
+    QHash<QString, QString> favorites;
+    for (const QString &name : diff.gone)
+      if (auto row = reader->get(name); row && row->favorite && row->metaSourceRevision) favorites.insert(*row->metaSourceRevision, name);
+    if (!favorites.isEmpty())
+      for (const QString &name : diff.updated)
+        if (const auto revision = metadata::sourceRevision(path::join(album, name)); revision && favorites.contains(*revision)) diff.favoriteRenames << name;
+  }
+  return diff;
+}
+
+// Writes the changed rows and the signature taken before the listing, then queues the changed files for processing.
+// The caller holds the album's inventory lock when inventoryHeld.
+void applyDiff(const QString &root, const QString &album, const QString &id, const AlbumDiff &diff, const QString &signature, bool inventoryHeld) {
+  // Like a full scan: an album listed with files has its metadata database.
+  if (!diff.updated.isEmpty()) metadata::prepareDatabase(album);
+  {
+    std::unique_ptr<FileLock> inventory;
+    if (!inventoryHeld) inventory = FileLock::acquire(path::join(album, QStringLiteral(".room237-inventory.lock")), std::chrono::seconds(1800), std::chrono::milliseconds(20));
+    const QString database = path::join(album, QStringLiteral(".room237-metadata/album.sqlite"));
+    std::optional<album_db::FileReader> reader;
+    if (!diff.updated.isEmpty() && isFile(database)) reader.emplace(database);
+    auto guard = metadata::lockMetadataForWrite({album});
+    db::Connection conn = open(root);
+    db::Transaction tx(conn);
+    for (const QString &name : diff.gone) conn.execute(QStringLiteral("DELETE FROM media WHERE album=?1 AND name=?2"), {id, name});
+    for (const QString &name : diff.updated) put(conn, id, name, path::join(album, name), reader ? reader->get(name).value_or(FileMetaEntry()) : FileMetaEntry(), std::nullopt);
+    conn.execute(QStringLiteral("INSERT INTO scanned(album,generation,signature) VALUES(?1,0,?2) ON CONFLICT(album) DO UPDATE SET signature=excluded.signature"), {id, signature});
+    tx.commit();
+  }
+  if (diff.empty()) return;
+  for (const QString &name : diff.favoriteRenames) {
+    try {
+      metadata::setMediaFavorite(path::join(album, name), true);
+    } catch (const std::exception &error) {
+      qWarning("Favorite not carried over to %s: %s", qUtf8Printable(name), error.what());
+    }
+  }
+  QStringList paths;
+  for (const QString &name : diff.gone) preload::dropPreloadForPath(path::join(album, name));
+  for (const QString &name : diff.updated) paths << path::join(album, name);
+  preload::enqueueChangedFiles(album, paths);
+}
+}  // namespace
+
+bool reconcileAlbum(const QString &rootDir, const QString &id) {
+  if (nestedInVault(rootDir)) return false;
+  const QString root = rootDir;
+  initialize(root);
+  const QString album = path::join(root, id);
+  if (!isDir(album)) {
+    retainAlbums(root, albumIds(root, album::walkAlbumPaths(root)));
+    return true;
+  }
+  if (!path::startsWith(canonical(album), canonical(root))) fail(QStringLiteral("Album outside library"));
+  // Taken before the listing: if the folder changes during it, the stored signature is older and the next listing
+  // rescans, never the other way round.
+  const QString signature = scanSignature(album);
+  const AlbumDiff diff = diffAlbum(root, album, id);
+  if (!diff.overflow && !isFile(pendingMarker(root, id))) {
+    applyDiff(root, album, id, diff, signature, false);
+    if (!diff.empty()) return true;
     // A nested album renamed or moved here changes only this listing; the caller refreshes the tree.
     db::Connection conn = open(root);
     const QString prefix = id + QLatin1Char('/');
@@ -409,7 +484,7 @@ bool reconcileAlbum(const QString &rootDir, const QString &id) {
       const QString other = statement.text(0);
       if (other.startsWith(prefix) && !other.mid(prefix.size()).contains(QLatin1Char('/'))) scanned.insert(other);
     }
-    return scanned != children;
+    return scanned != diff.children;
   }
   scanAlbum(root, album);
   preload::dropPreloadForPath(album);
@@ -426,16 +501,30 @@ int scanAlbumIfNeeded(const QString &root, const QString &album, bool force, con
   auto inventory = FileLock::acquire(path::join(album, QStringLiteral(".room237-inventory.lock")), std::chrono::seconds(1800), std::chrono::milliseconds(20));
   media_delete::recoverAlbum(album);
   const QString id = albumId(root, album);
-  auto signature = [&] { return metadata::sourceRevision(album).value_or(QString()) + QLatin1Char('|') + readSettings().processingVersion(); };
+  auto signature = [&] { return scanSignature(album); };
   if (!force && !isFile(pendingMarker(root, id))) {
-    db::Connection conn = open(root);
-    db::Statement old = conn.prepare(QStringLiteral("SELECT signature FROM scanned WHERE album=?1"));
-    old.bind(1, id);
-    if (old.step() && old.text(0) == signature()) {
+    std::optional<QString> stored;
+    {
+      db::Connection conn = open(root);
+      db::Statement old = conn.prepare(QStringLiteral("SELECT signature FROM scanned WHERE album=?1"));
+      old.bind(1, id);
+      if (old.step()) stored = old.text(0);
+    }
+    const QString current = signature();
+    if (stored && *stored == current) {
+      db::Connection conn = open(root);
       db::Statement count = conn.prepare(QStringLiteral("SELECT count(*) FROM media WHERE album=?1"));
       count.bind(1, id);
       count.step();
       return int(count.integer(0));
+    }
+    // The folder changed under the same processing settings: a few changed files are listed one by one.
+    if (stored && stored->endsWith(QLatin1Char('|') + readSettings().processingVersion())) {
+      const AlbumDiff diff = diffAlbum(root, album, id);
+      if (!diff.overflow) {
+        applyDiff(root, album, id, diff, current, true);
+        return diff.seen;
+      }
     }
   }
   metadata::prepareDatabase(album);
@@ -547,14 +636,19 @@ MediaPage getMediaPage(const PageQuery &query) {
   const AdvancedSettings settings = readSettings();
   const QString version = settings.thumbVersion();
   std::optional<std::pair<QString, std::unique_ptr<album_db::FileReader>>> reader;
-  for (const PageItem &item : page.items) {
+  for (PageItem &item : page.items) {
     if (pageRequest.load(std::memory_order_relaxed) != request) fail(QStringLiteral("Page request superseded"));
     const QString file = path::join(item.albumPath, item.media.name);
     if (!isFile(file)) continue;
-    if (!reader || reader->first != item.albumPath) reader.emplace(item.albumPath, std::make_unique<album_db::FileReader>(path::join(item.albumPath, QStringLiteral(".room237-metadata/album.sqlite"))));
-    const FileMetaEntry entry = reader->second->get(item.media.name).value_or(FileMetaEntry());
+    if (!reader || reader->first != item.albumPath) {
+      // An album folder that appeared a moment ago may have no metadata database yet: its files have no entries.
+      const QString database = path::join(item.albumPath, QStringLiteral(".room237-metadata/album.sqlite"));
+      reader.emplace(item.albumPath, isFile(database) ? std::make_unique<album_db::FileReader>(database) : nullptr);
+    }
+    const FileMetaEntry entry = reader->second ? reader->second->get(item.media.name).value_or(FileMetaEntry()) : FileMetaEntry();
     const QString thumbs = path::join(item.albumPath, thumb::kThumbDir);
-    if (!thumb::cachedThumbCurrent(file, thumbs, entry, version)) preload::enqueueThumbTask(file, thumbs, false, preload::TaskPriority::High);
+    if (entry.thumbFailed && metadata::isThumbFailed(file)) item.media.thumbFailed = true;
+    else if (!thumb::cachedThumbCurrent(file, thumbs, entry, version)) preload::enqueueThumbTask(file, thumbs, false, preload::TaskPriority::High);
     if (!metadata::metadataCacheCurrentWithSettings(file, entry, settings)) preload::enqueueMetaTask(file, false, preload::TaskPriority::High);
   }
   return page;

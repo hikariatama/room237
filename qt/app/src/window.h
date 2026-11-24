@@ -14,6 +14,7 @@ class QFileDialog;
 #include <QSet>
 #include <QStackedWidget>
 class HashPill;
+struct ImportPlan;
 struct UiState {
   int columns = 7;
   double sidebarFraction = 0.2;  // Default 20% of the width, 16% to 24%.
@@ -52,6 +53,8 @@ public:
   void moveItems(const QVector<MediaItem> &items, const QString &targetId, std::function<void(QString)> done = {});
   void deleteItems(const QVector<MediaItem> &items, std::function<void(QString)> done = {});
   void importPaths(const QStringList &paths, const QString &albumId, std::function<void(QString)> done = {});
+  // The files of a planned import, by album folder relative to the target album.
+  void runImport(const ImportPlan &plan, const QString &albumId, std::function<void(QString)> done);
   void refresh(std::function<void()> done = {});
   void moveAlbum(const QString &albumId, const QString &parentId, std::function<void(QString)> done = {});
   void renameAlbum(const QString &albumId, const QString &name, std::function<void(QString)> done = {});
@@ -144,6 +147,8 @@ private:
   void onVaultProgress(const QJsonObject &progress);
   // The open root is left or locked: its pass reports no more, so its screen and toasts stop waiting for it.
   void dropVaultPass();
+  // The inactivity lock, deferred while files of the open root are being encrypted or decrypted.
+  void lockWhenIdle();
   void setProcessing(bool processing);
   // Decrypted copies of `items` for another app, after the user agreed in this unlock.
   void confirmExport(std::function<void()> proceed);
@@ -210,7 +215,7 @@ private:
   QLabel *dragHint_;
   Updater *updater_;
   RootWatcher watcher_;
-  QTimer reconcileTimer_, thumbRefresh_, inactivity_, saveTimer_, windowStateTimer_;
+  QTimer reconcileTimer_, thumbRefresh_, inactivity_, saveTimer_, windowStateTimer_, coverRefresh_, duplicateProbe_;
   QString profile_, cliRoot_, keyBuffer_;
   QElapsedTimer keyClock_;
   UiState ui_;
@@ -218,6 +223,9 @@ private:
   bool privacyEnabled_ = false, lockscreenEnabled_ = false, confirmOpenEnabled_ = false, locked_ = false, unfocused_ = false, displayDecoy_ = false;
   bool reconcileRoot_ = false, healthyMarked_ = false, closing_ = false, resizingSidebar_ = false, batchRunning_ = false;
   QSet<QString> reconcileAlbums_;
+  // Albums the app itself is changing: their folder events wait for the reconcile at the end of the operation.
+  QHash<QString, int> busyAlbums_;
+  void markBusy(const QStringList &albums, int delta);
   QHash<QString, qint64> lastReconcile_;
   QString activeDirectoryId_;
   int activeMissingAfter_ = -1;  // Listing number at the first miss of the open album; -1 when it was found.

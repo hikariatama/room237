@@ -664,6 +664,19 @@ void TempFile::write(const QByteArray &bytes) {
   if (file.write(bytes) != bytes.size()) fail(file.errorString());
 }
 void TempFile::sync() { if (file_) syncOpenedFile(*file_); else syncFile(path_); }
+void TempFile::syncOrdered() {
+#ifdef Q_OS_MACOS
+  if (file_) return syncOpenedFileOrdered(*file_);
+  const int fd = ::open(native(path_).constData(), O_RDONLY);
+  if (fd < 0) fail(errnoText(errno));
+  const int result = ::fcntl(fd, F_BARRIERFSYNC) == 0 ? 0 : ::fsync(fd);
+  const int error = errno;
+  ::close(fd);
+  if (result != 0) fail(errnoText(error));
+#else
+  sync();
+#endif
+}
 qint64 TempFile::size() const { return file_ ? file_->size() : qint64(stat(path_).size); }
 void TempFile::persist(const QString &target) {
   if (file_) {

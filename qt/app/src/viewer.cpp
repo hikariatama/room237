@@ -16,6 +16,7 @@
 #include <QHBoxLayout>
 #include <QBuffer>
 #include <QImageReader>
+#include "qa_censor.h"
 #include "secure_media.h"
 #include <QKeyEvent>
 #include <QLocale>
@@ -668,6 +669,7 @@ void Viewer::requestAnimationFrame() {
     if (!frame.isNull()) {
       if (frame.width() > box.width() || frame.height() > box.height()) frame = frame.scaled(box, Qt::KeepAspectRatio, Qt::SmoothTransformation);
       frame = frame.convertToFormat(frame.hasAlphaChannel() ? QImage::Format_ARGB32_Premultiplied : QImage::Format_RGB32);
+      qaCensor(frame);
     }
     QMetaObject::invokeMethod(this, [this, generation, delay, original, frame = std::move(frame)] {
       if (!animation_ || generation != animation_->generation) return;
@@ -755,6 +757,12 @@ void Viewer::ensureFull() {
   });
 }
 void Viewer::startVideo() {
+#ifdef ROOM237_QA
+  if (qaCensorOn()) {  // Video frames bypass the decoders, so a censored run does not show them.
+    showFailure();
+    return;
+  }
+#endif
   if (!player_) {
     player_ = new QMediaPlayer(this);
     audio_ = new QAudioOutput(this);

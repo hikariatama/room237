@@ -24,6 +24,8 @@
 #include "native_image.h"
 #include "directory_move.h"
 #include "album_tree.h"
+#include "thumb.h"
+#include <QProcess>
 #include <sqlite3.h>
 #include <QBuffer>
 #include <QProcess>
@@ -187,6 +189,137 @@ private Q_SLOTS:
     SettingsStore::load(profile_->path());
   }
 
+  void reconcileAppliesSmallChangesFileByFile() {
+    QTemporaryDir fixture;
+    const QString root = real(fixture), album = path::join(root, "Album");
+    createDir(album);
+    for (int i = 0; i < 6; i++) image(album, QStringLiteral("p%1.png").arg(i), qRgb(i * 30, 40, 90));
+    catalog::initialize(root);
+    QCOMPARE(catalog::scanAlbum(root, album), 6);
+    QVERIFY(!catalog::reconcileAlbum(root, "Album"));
+    const auto names = [&] {
+      catalog::PageQuery query;
+      query.rootDir = root;
+      query.albumId = QStringLiteral("Album");
+      query.sortKey = QStringLiteral("name");
+      query.sortDir = QStringLiteral("asc");
+      QStringList out;
+      for (const catalog::PageItem &item : catalog::queryPage(query).items) out << item.media.name;
+      return out;
+    };
+    image(album, "new1.png", qRgb(1, 2, 3));
+    image(album, "new2.png", qRgb(4, 5, 6));
+    removeFile(path::join(album, "p0.png"));
+    QVERIFY(catalog::reconcileAlbum(root, "Album"));
+    const QStringList incremental = names();
+    QCOMPARE(incremental, (QStringList{"new1.png", "new2.png", "p1.png", "p2.png", "p3.png", "p4.png", "p5.png"}));
+    // The same listing as a full scan, and a folder that matches its catalog afterwards.
+    QVERIFY(!catalog::reconcileAlbum(root, "Album"));
+    QCOMPARE(catalog::scanAlbum(root, album), 7);
+    QCOMPARE(names(), incremental);
+    // An album listing after a change outside the app lists the changed files alone, with the same result.
+    image(album, "new3.png", qRgb(7, 8, 9));
+    removeFile(path::join(album, "p1.png"));
+    QCOMPARE(catalog::scanAlbumIfNeeded(root, album, false), 7);
+    const QStringList listed = names();
+    QCOMPARE(listed, (QStringList{"new1.png", "new2.png", "new3.png", "p2.png", "p3.png", "p4.png", "p5.png"}));
+    QCOMPARE(catalog::scanAlbumIfNeeded(root, album, false), 7);
+    QCOMPARE(catalog::scanAlbum(root, album), 7);
+    QCOMPARE(names(), listed);
+  }
+  void replacedAlbumFolderIsListed() {
+    QTemporaryDir fixture;
+    const QString base = real(fixture), root = path::join(base, "lib"), album = path::join(root, "Open");
+    createDirs(album);
+    for (int i = 0; i < 3; i++) image(album, QStringLiteral("o%1.png").arg(i), qRgb(i * 60, 10, 10));
+    catalog::initialize(root);
+    QCOMPARE(catalog::scanAlbum(root, album), 3);
+    QVERIFY(::rename(QFile::encodeName(album).constData(), QFile::encodeName(path::join(base, "aside")).constData()) == 0);
+    createDir(album);
+    image(album, "n0.png", qRgb(1, 2, 3));
+    image(album, "n1.png", qRgb(4, 5, 6));
+    QVERIFY(catalog::reconcileAlbum(root, "Open"));
+    catalog::PageQuery query;
+    query.rootDir = root;
+    query.albumId = QStringLiteral("Open");
+    query.sortKey = QStringLiteral("name");
+    query.sortDir = QStringLiteral("asc");
+    QStringList names;
+    for (const catalog::PageItem &item : catalog::getMediaPage(query).items) names << item.media.name;
+    QCOMPARE(names, (QStringList{"n0.png", "n1.png"}));
+  }
+  void reconcileKeepsFavoriteOfRenamedFile() {
+    QTemporaryDir fixture;
+    const QString root = real(fixture), album = path::join(root, "Album");
+    createDir(album);
+    for (int i = 0; i < 4; i++) image(album, QStringLiteral("p%1.png").arg(i), qRgb(i * 50, 90, 40));
+    catalog::initialize(root);
+    QCOMPARE(catalog::scanAlbum(root, album), 4);
+    metadata::setMediaFavorite(path::join(album, "p1.png"), true);
+    QVERIFY(::rename(QFile::encodeName(path::join(album, "p1.png")).constData(), QFile::encodeName(path::join(album, "renamed.png")).constData()) == 0);
+    QVERIFY(catalog::reconcileAlbum(root, "Album"));
+    catalog::PageQuery query;
+    query.rootDir = root;
+    query.albumId = QStringLiteral("Album");
+    query.sortKey = QStringLiteral("name");
+    query.sortDir = QStringLiteral("asc");
+    QStringList favorites;
+    for (const catalog::PageItem &item : catalog::queryPage(query).items)
+      if (item.media.favorite.value_or(false)) favorites << item.media.name;
+    QCOMPARE(favorites, QStringList{"renamed.png"});
+  }
+  void moveValidationIgnoresNewPreviews() {
+    QTemporaryDir fixture;
+    const QString album = path::join(real(fixture), "Album");
+    createDir(album);
+    const QString file = image(album, "p.png", qRgb(10, 20, 30));
+    const QString listed = metadata::mediaRevision(file);
+    createDir(path::join(album, ".room237-thumb"));
+    write(path::join(album, ".room237-thumb"), "p.png.webp", "preview built after the listing");
+    QVERIFY(metadata::mediaRevision(file) != listed);
+    metadata::validateMediaRevisions({metadata::ObservedMedia{file, listed}});
+    image(album, "p.png", qRgb(200, 20, 30));
+    write(album, "p.png", QByteArray(5000, 'x'));
+    QVERIFY_THROWS_EXCEPTION(Error, metadata::validateMediaRevisions({metadata::ObservedMedia{file, listed}}));
+  }
+  void albumRenameChangesOnlyTheCase() {
+    QTemporaryDir fixture;
+    const QString root = real(fixture);
+    createDir(path::join(root, "Trips"));
+    image(path::join(root, "Trips"), "p.png", qRgb(1, 2, 3));
+    catalog::initialize(root);
+    const album::RenamedAlbumResult result = album::renameAlbum(root, "Trips", "trips");
+    QCOMPARE(result.newRelativePath, QStringLiteral("trips"));
+    QCOMPARE(QDir(root).entryList(QDir::Dirs | QDir::NoDotAndDotDot).filter(QStringLiteral("rips")), QStringList{"trips"});
+    QVERIFY(isFile(path::join(path::join(root, "trips"), "p.png")));
+  }
+  void copiedLibraryKeepsPreviewAndMetadata() {
+#ifdef Q_OS_WIN
+    QSKIP("cp -Rp is not available");
+#else
+    QTemporaryDir fixture;
+    const QString root = real(fixture), album = path::join(root, "Album"), copy = path::join(root, "Copy");
+    createDir(album);
+    const QString file = image(album, "p.png", qRgb(10, 200, 30));
+    catalog::initialize(root);
+    thumb::ensureThumb(file, path::join(album, thumb::kThumbDir));
+    metadata::getFileMetadataCached(file);
+    QVERIFY(metadata::metadataCacheCurrent(file, *metadata::readFileEntry(file)));
+    QCOMPARE(QProcess::execute("cp", {"-Rp", album, copy}), 0);
+    const QString copied = path::join(copy, "p.png"), preview = thumb::thumbPath(copied, path::join(copy, thumb::kThumbDir));
+    const auto previewBefore = stat(preview).mtimeNs;
+    QVERIFY(!metadata::metadataCacheCurrent(copied, *metadata::readFileEntry(copied)));
+    thumb::ensureThumb(copied, path::join(copy, thumb::kThumbDir));
+    QCOMPARE(stat(preview).mtimeNs, previewBefore);
+    QVERIFY(metadata::metadataCacheCurrent(copied, *metadata::readFileEntry(copied)));
+#endif
+  }
+  void appleDoubleFilesAreNotMedia() {
+    QVERIFY(!constants::isMedia("/library/Album/._photo.jpg"));
+    QVERIFY(!constants::isMedia("._photo.jpg"));
+    QVERIFY(constants::isMedia("/library/Album/photo.jpg"));
+    QVERIFY(constants::isMedia("/library/Album/.hidden.jpg"));
+  }
   void pendingRecoveryRejectsServiceSymlinks() {
     QTemporaryDir fixture;
     const QString base = real(fixture), root = path::join(base, "library"), victim = path::join(base, "victim");

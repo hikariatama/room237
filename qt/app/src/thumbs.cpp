@@ -9,6 +9,7 @@
 #include "platform.h"
 #include "secure_media.h"
 #include "qatrace.h"
+#include "qa_censor.h"
 #include "util.h"
 #include <QColorSpace>
 #include <QFileInfo>
@@ -25,7 +26,7 @@ static QImage cover(const QImage &source, int size) {
   if (out.width() != size || out.height() != size) out = out.copy((out.width() - size) / 2, (out.height() - size) / 2, size, size);
   return out;
 }
-QImage decodeThumbnail(const QString &path, int size, int height) {
+static QImage decodeThumbnailPlain(const QString &path, int size, int height) {
   QImage image;
   if (SecureMedia::isSealed(path)) {
     QByteArray bytes = SecureMedia::read(path, 64 << 20);
@@ -51,6 +52,11 @@ QImage decodeThumbnail(const QString &path, int size, int height) {
     return image.scaled(size, height, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
   }
   return cover(image, size);
+}
+QImage decodeThumbnail(const QString &path, int size, int height) {
+  QImage image = decodeThumbnailPlain(path, size, height);
+  qaCensor(image);
+  return image;
 }
 // Formats without a Qt image plugin on this platform. Bounded: the process is killed after 30 seconds.
 // `input` is the plaintext of an encrypted file, given to FFmpeg through its standard input.
@@ -80,7 +86,9 @@ static bool needsNativeDecoder(const QString &path) {
 static QImage finished(QImage image) {
   if (image.isNull()) return image;
   if (image.colorSpace().isValid() && image.colorSpace() != QColorSpace::SRgb) image.convertToColorSpace(QColorSpace::SRgb);
-  return image.hasAlphaChannel() ? image.convertToFormat(QImage::Format_ARGB32_Premultiplied) : image.convertToFormat(QImage::Format_RGB32);
+  image = image.hasAlphaChannel() ? image.convertToFormat(QImage::Format_ARGB32_Premultiplied) : image.convertToFormat(QImage::Format_RGB32);
+  qaCensor(image);
+  return image;
 }
 // Encrypted originals decode from memory: Qt's readers detect the format from the content, ImageIO covers HEIC and
 // AVIF, FFmpeg the rest.
@@ -151,7 +159,9 @@ QImage decodeBlurPreview(const QString &dataUrl) {
   QBuffer buffer(&bytes);
   buffer.open(QIODevice::ReadOnly);
   QImageReader reader(&buffer, "webp");
-  return reader.read().convertToFormat(QImage::Format_RGB32);
+  QImage image = reader.read().convertToFormat(QImage::Format_RGB32);
+  qaCensor(image);
+  return image;
 }
 ThumbPipeline::ThumbPipeline(int workers, qint64 budgetBytes, QObject *parent) : QObject(parent), budget_(budgetBytes) {
   for (int i = 0; i < workers; i++) threads_.emplace_back([this] { work(); });

@@ -168,6 +168,9 @@ void PrivacyShield::paintEvent(QPaintEvent *) {
     p.drawPixmap(0, 0, frost_);
   }
 }
+// Previews and metadata steps left when the screen is due: fewer finish within about a second.
+static constexpr int kScreenMinimumWork = 200;
+static constexpr qint64 kScreenMinimumMs = 600;
 PreloadOverlay::PreloadOverlay(QWidget *parent) : QWidget(parent) {
   setAcceptDrops(false);
   hide();
@@ -192,6 +195,11 @@ PreloadOverlay::PreloadOverlay(QWidget *parent) : QWidget(parent) {
   showDelay_.setSingleShot(true);
   showDelay_.setInterval(500);
   connect(&showDelay_, &QTimer::timeout, this, [this] {
+    // Work that ends within a second or so finishes behind the gallery: the screen would only flash.
+    if (remaining() < kScreenMinimumWork) {
+      if (preloading_ || vault_) showDelay_.start(250);
+      return;
+    }
     setGeometry(parentWidget()->rect());
     refreshFrost();
     show();
@@ -224,6 +232,10 @@ PreloadOverlay::PreloadOverlay(QWidget *parent) : QWidget(parent) {
   spin_.setLoopCount(-1);
   connect(&spin_, &QVariantAnimation::valueChanged, this, [this] { if (isVisible()) update(QRect(width() / 2 - 250, height() / 2 - 40, 40, 200)); });
 }
+int PreloadOverlay::remaining() const {
+  if (vault_) return qMax(0, vaultTotal_ - vaultDone_);
+  return qMax(0, thumbsTotal_ - thumbsDone_) + qMax(0, metaTotal_ - metaDone_);
+}
 void PreloadOverlay::appear() {
   if (!isVisible() && !showDelay_.isActive()) showDelay_.start();
   else if (isVisible() && fade_.endValue().toReal() < 1) {
@@ -243,6 +255,11 @@ void PreloadOverlay::disappear() {
   idle_.stop();
   spin_.stop();
   if (!isVisible()) return;
+  // Once shown, the screen stays long enough to be read instead of blinking away.
+  if (const qint64 shown = shownAt_.isValid() ? shownAt_.elapsed() : kScreenMinimumMs; shown < kScreenMinimumMs) {
+    QTimer::singleShot(kScreenMinimumMs - shown, this, &PreloadOverlay::disappear);
+    return;
+  }
   fade_.stop();
   fade_.setStartValue(opacity_);
   fade_.setEndValue(0.0);
@@ -319,6 +336,7 @@ void PreloadOverlay::place() {
 }
 void PreloadOverlay::resizeEvent(QResizeEvent *) { place(); }
 void PreloadOverlay::showEvent(QShowEvent *) {
+  shownAt_.start();
   place();
   frostTimer_.start();
   emit blockingChanged(true);

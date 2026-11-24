@@ -60,5 +60,8 @@ bool openFile(QFile &file, const QString &path, QIODevice::OpenMode mode);
 QString decoderPath(const QString &path, bool output = false);
 FileInfo openedFileInfo(const QFile &file);
 void syncOpenedFile(QFile &file);
+// Orders the file's data before later writes (such as its publication by rename) without flushing the drive cache;
+// a later full sync makes everything before it durable. macOS: F_BARRIERFSYNC; elsewhere the same as syncOpenedFile.
+void syncOpenedFileOrdered(QFile &file);
 
 }  // namespace core

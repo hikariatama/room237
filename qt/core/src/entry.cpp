@@ -189,6 +189,7 @@ QJsonObject DetachedMediaEntry::toJson() const {
   if (thumbnailName) o.insert(QStringLiteral("thumbnailName"), *thumbnailName);
   if (favorite) o.insert(QStringLiteral("favorite"), *favorite);
   if (displayName) o.insert(QStringLiteral("displayName"), *displayName);
+  if (thumbFailed) o.insert(QStringLiteral("thumbFailed"), true);
   return o;
 }
 

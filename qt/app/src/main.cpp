@@ -1,3 +1,5 @@
+#include <cstdio>
+#include <cstdlib>
 #include "accessibility.h"
 #include "platform.h"
 #ifdef ROOM237_QA
@@ -19,7 +21,7 @@
 #include <QRegularExpression>
 #include <QIcon>
 // Usage: room237 [--root DIR] [--profile DIR] [--legacy-profile DIR].
-int main(int argc, char **argv) {
+static int run(int argc, char **argv) {
   for (int i = 1; i < argc; i++) {
     if (qstrcmp(argv[i], "--version") == 0) {
       fprintf(stdout, "%s\n", ROOM237_VERSION);
@@ -85,4 +87,12 @@ int main(int argc, char **argv) {
   if (qEnvironmentVariableIsSet("ROOM237_SCROLL_LOG")) installScrollLog(&window, qEnvironmentVariable("ROOM237_SCROLL_LOG"));
 #endif
   return app.exec();
+}
+// Detached core workers (previews, metadata, hashes) can still be running when the window has closed. Static
+// destructors would destroy the mutexes, queues and settings they use and crash the process on its way out; the
+// window, the core client and the application object have shut down by now, so the process ends without them.
+int main(int argc, char **argv) {
+  const int code = run(argc, argv);
+  std::fflush(nullptr);
+  std::_Exit(code);
 }

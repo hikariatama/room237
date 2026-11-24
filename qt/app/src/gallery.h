@@ -37,6 +37,9 @@ public:
   bool isSelected(int index) const;
   void clearSelection();
   void selectAll();
+#ifdef ROOM237_QA
+  void selectForQa(const QList<int> &indices);
+#endif
   void collectSelection(std::function<void(QVector<MediaItem>)> done);
   QRect tileRect(int index) const;  // viewport coordinates
   int tileRadius() const;

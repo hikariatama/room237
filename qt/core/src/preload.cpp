@@ -540,8 +540,13 @@ void preloadDir(const QString &dir, const std::shared_ptr<std::atomic<bool>> &ca
     if (path::hasExtension(filePath, {"heic"}) && hidden.contains(file.name)) continue;
     if (!constants::isMedia(filePath)) continue;
     const std::optional<FileMetaEntry> cached = reader.get(file.name);
-    if (!(cached && thumb::cachedPreviewsCurrent(filePath, thumbDir, *cached, version))) enqueueThumbTask(filePath, thumbDir, true, TaskPriority::Low);
-    if (!(cached && metadata::metadataCacheCurrentWithSettings(filePath, *cached, settings))) enqueueMetaTask(filePath, true, TaskPriority::Low);
+    const bool thumbStale = !(cached && thumb::cachedPreviewsCurrent(filePath, thumbDir, *cached, version));
+    if (thumbStale) enqueueThumbTask(filePath, thumbDir, true, TaskPriority::Low);
+    // A file whose preview was made from bytes of the same time and size (a copied or restored library) is checked by
+    // its preview task, which keeps the stored metadata when the bytes match and asks for extraction when not.
+    const bool sameContentCandidate = thumbStale && cached && cached->thumbVersion == version && cached->thumbSourceHash && cached->thumbSourceRevision &&
+                                      cached->thumbSourceRevision->section(QLatin1Char('-'), 0, 1) == metadata::sourceRevision(filePath).value_or(QString()).section(QLatin1Char('-'), 0, 1);
+    if (!sameContentCandidate && !(cached && metadata::metadataCacheCurrentWithSettings(filePath, *cached, settings))) enqueueMetaTask(filePath, true, TaskPriority::Low);
     if (++unreported == 64) {
       planScanned(dir, unreported);
       unreported = 0;
@@ -549,6 +554,16 @@ void preloadDir(const QString &dir, const std::shared_ptr<std::atomic<bool>> &ca
     }
   }
   planScanned(dir, unreported);
+}
+
+// A file moved, deleted or rewritten while it was processed did not fail: its new state is processed on its own.
+bool sourceUnchanged(const QString &file, const std::optional<QString> &source) {
+  if (!source) return false;
+  try {
+    return metadata::sourceRevision(file) == source;
+  } catch (const std::exception &) {
+    return false;
+  }
 }
 
 void startThumbWorker() {
@@ -576,13 +591,21 @@ void startThumbWorker() {
           ++doneThumbs;
           emitProcessed(file, "thumbnail");
         } catch (const std::exception &e) {
-          qWarning("Failed to generate thumbnail %s: %s", qUtf8Printable(file), e.what());
-          if (source) {
+          if (!sourceUnchanged(file, source)) {
+            qInfo("Thumbnail skipped, %s was moved or changed meanwhile", qUtf8Printable(file));
+          } else {
+            qWarning("Failed to generate thumbnail %s: %s", qUtf8Printable(file), e.what());
             try {
               metadata::markThumbFailed(file, *source, settings.processingVersion());
+              emitProcessed(file, "thumbnail-failed");
             } catch (const std::exception &) {
             }
           }
+        }
+        // Metadata left to this task (see preloadDir) is extracted when the stored one did not carry over.
+        try {
+          if (const auto entry = metadata::readFileEntry(file); isFile(file) && !(entry && metadata::metadataCacheCurrentWithSettings(file, *entry, settings))) enqueueMetaTask(file, false, TaskPriority::Low);
+        } catch (const std::exception &) {
         }
         const bool retry = settings.processingVersion() != readSettings().processingVersion();
         thumbWork.markDone(file, retry ? std::optional(task) : std::nullopt);
@@ -618,8 +641,10 @@ void startMetaWorker() {
           ++doneMeta;
           emitProcessed(file, "metadata");
         } catch (const std::exception &e) {
-          qWarning("Failed to extract metadata %s: %s", qUtf8Printable(file), e.what());
-          if (source) {
+          if (!sourceUnchanged(file, source)) {
+            qInfo("Metadata skipped, %s was moved or changed meanwhile", qUtf8Printable(file));
+          } else {
+            qWarning("Failed to extract metadata %s: %s", qUtf8Printable(file), e.what());
             try {
               metadata::markMetaFailed(file, *source, version);
             } catch (const std::exception &) {
@@ -752,6 +777,16 @@ void enqueuePreload(const QString &dir) {
     preloadQueue.push_back(dir);
   }
   if (preloaderRunning) emitProgress(std::nullopt);
+}
+
+void enqueueChangedFiles(const QString &dir, const QStringList &paths) {
+  if (!qaPathAllowed(dir) || outsideRoot(dir)) return;
+  const QString thumbDir = path::join(dir, thumb::kThumbDir);
+  for (const QString &file : paths) {
+    enqueueThumbTask(file, thumbDir, false, TaskPriority::High);
+    enqueueMetaTask(file, false, TaskPriority::High);
+  }
+  queueAlbumForHashing(dir);
 }
 
 void enableEvents() { eventsOn = true; }

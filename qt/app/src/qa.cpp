@@ -26,6 +26,10 @@
 #include <memory>
 #include <QUuid>
 #include <QFileDialog>
+#include <QThreadPool>
+#include <QDragEnterEvent>
+#include <QPointer>
+#include <dlfcn.h>
 // Tests name albums by relative path or by folder name.
 static const AlbumInfo *qaAlbum(const GalleryModel *model, const QString &key) {
   if (const AlbumInfo *exact = model->albumById(key)) return exact;
@@ -45,6 +49,19 @@ QaDriver::QaDriver(MainWindow *window, quint16 port, const QString &fence) : QOb
       handle(c);
     }
   });
+  qApp->installEventFilter(this);
+  GalleryModel *model = w_->model();
+  connect(model, &GalleryModel::reset, this, [this] { countModel("model-reset", QString::number(w_->model()->total())); });
+  connect(model, &GalleryModel::aboutToReset, this, [this] { countModel("model-about-to-reset"); });
+  connect(model, &GalleryModel::albumsChanged, this, [this] { countModel("albums-changed", QString::number(w_->model()->albums.size())); });
+  connect(model, &GalleryModel::geometryChanged, this, [this] { countModel("geometry-changed"); });
+  connect(model, &GalleryModel::pageLoaded, this, [this](int first, int last) { countModel("page-loaded", QStringLiteral("%1-%2").arg(first).arg(last)); });
+  connect(&film_, &QTimer::timeout, this, [this] {
+    QImage frame = w_->grab().toImage();
+    if (filmScale_ != 1.0) frame = frame.scaled(frame.size() * filmScale_, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    const QString path = QStringLiteral("%1/f%2_%3.png").arg(filmDir_).arg(filmIndex_++, 5, 10, QLatin1Char('0')).arg(qint64(filmClock_.nsecsElapsed() / 1e6), 6, 10, QLatin1Char('0'));
+    QThreadPool::globalInstance()->start([frame = std::move(frame), path] { frame.save(path); });
+  });
   socket_.connectToHost(QHostAddress::LocalHost, port);
   socket_.setSocketOption(QAbstractSocket::LowDelayOption, 1);
   if (gQaTraceOn) {
@@ -60,7 +77,33 @@ QaDriver::QaDriver(MainWindow *window, quint16 port, const QString &fence) : QOb
     heartbeat_.start();
   }
 }
+void QaDriver::countModel(const char *name, const QString &detail) {
+  modelEvents_[QString::fromLatin1(name)]++;
+  qaTrace(name, detail);
+}
+void QaDriver::sendDrop(QWidget *target, QPoint at, QMimeData *mime, Qt::DropActions actions, int holdMs, std::function<void()> done) {
+  QDragEnterEvent enter(at, actions, mime, Qt::LeftButton, Qt::NoModifier);
+  QCoreApplication::sendEvent(target, &enter);
+  QDragMoveEvent move(at, actions, mime, Qt::LeftButton, Qt::NoModifier);
+  QCoreApplication::sendEvent(target, &move);
+  QPointer<QWidget> guard(target);
+  QTimer::singleShot(holdMs, this, [=, this] {
+    if (guard) {
+      QDropEvent drop(QPointF(at), actions, mime, Qt::LeftButton, Qt::NoModifier);
+      QCoreApplication::sendEvent(guard, &drop);
+    }
+    delete mime;
+    done();
+  });
+}
 bool QaDriver::eventFilter(QObject *object, QEvent *event) {
+  if (event->type() == QEvent::Paint && object->isWidgetType()) {
+    const QObject *owner = object->parent();
+    QString key = QString::fromLatin1(object->metaObject()->className());
+    if (key == QLatin1String("QWidget") && owner) key = QString::fromLatin1(owner->metaObject()->className()) + QStringLiteral("/viewport");
+    paints_[key]++;
+  }
+  if (!gQaTraceOn) return false;
   switch (event->type()) {
     case QEvent::KeyPress:
     case QEvent::ShortcutOverride:
@@ -532,7 +575,8 @@ void QaDriver::handle(const QJsonObject &c) {
   } else if (op == QLatin1String("dup_open")) {
     w_->showDuplicates(true, [=, this] {
       const double firstGroup = ms();
-      until([this] { const auto v = w_->duplicates()->visibleState(); return v.visible > 0 && v.ready == v.expected; }, 60000, [=, this](bool ok) {
+      // Ready: the groups on screen show their pictures, or the scan ended without groups.
+      until([this] { const auto v = w_->duplicates()->visibleState(); return (v.visible > 0 && v.ready == v.expected) || (!w_->duplicates()->loading() && w_->duplicates()->total() == 0); }, 60000, [=, this](bool ok) {
         if (!ok) return fail(id, QStringLiteral("timeout: duplicates ready"));
         reply(id, QJsonObject{{QStringLiteral("firstGroupMs"), firstGroup}, {QStringLiteral("readyMs"), ms()}, {QStringLiteral("groups"), w_->duplicates()->total()}, {QStringLiteral("files"), w_->duplicates()->filesTotal()}});
       });
@@ -753,6 +797,86 @@ void QaDriver::handle(const QJsonObject &c) {
     reply(id, QJsonValue());
     socket_.flush();
     QTimer::singleShot(0, qApp, &QCoreApplication::quit);
+  } else if (op == QLatin1String("diag")) {
+    // Counters since the last reset: paint events, model signals, core calls and, under the I/O counter library,
+    // file system calls by kind of path.
+    const bool reset = c.value(QLatin1String("reset")).toBool();
+    QJsonObject paints, model;
+    for (auto it = paints_.cbegin(); it != paints_.cend(); ++it) paints.insert(it.key(), it.value());
+    for (auto it = modelEvents_.cbegin(); it != modelEvents_.cend(); ++it) model.insert(it.key(), it.value());
+    QJsonObject out{{QStringLiteral("paints"), paints}, {QStringLiteral("model"), model}, {QStringLiteral("core"), CoreClient::qaStats(reset)}, {QStringLiteral("toasts"), w_->toasts()->visibleCount()}};
+    using Snapshot = int (*)(char *, int, int);
+    if (auto snapshot = reinterpret_cast<Snapshot>(dlsym(RTLD_DEFAULT, "r237_io_snapshot"))) {
+      QByteArray text(1 << 16, 0);
+      const int length = snapshot(text.data(), int(text.size()), reset ? 1 : 0);
+      if (length > 0) out.insert(QStringLiteral("io"), QJsonDocument::fromJson(text.left(length)).object());
+    }
+    if (reset) paints_.clear(), modelEvents_.clear();
+    reply(id, out);
+  } else if (op == QLatin1String("film_start")) {
+    const QString dir = str("dir");
+    if (!QaFence::inside(dir, fence_, true) || !QDir().mkpath(dir)) return fail(id, QStringLiteral("film fence"));
+    filmDir_ = dir;
+    filmIndex_ = 0;
+    filmScale_ = c.value(QLatin1String("scale")).toDouble(0.5);
+    filmClock_.start();
+    film_.start(c.value(QLatin1String("interval")).toInt(33));
+    reply(id, QJsonValue());
+  } else if (op == QLatin1String("film_stop")) {
+    film_.stop();
+    QThreadPool::globalInstance()->waitForDone(10000);
+    reply(id, QJsonObject{{QStringLiteral("frames"), filmIndex_}, {QStringLiteral("ms"), filmClock_.nsecsElapsed() / 1e6}});
+  } else if (op == QLatin1String("select")) {
+    QList<int> indices;
+    for (const QJsonValue &v : c.value(QLatin1String("indices")).toArray()) indices << v.toInt();
+    w_->gallery()->selectForQa(indices);
+    reply(id, QJsonObject{{QStringLiteral("count"), w_->gallery()->selectionCount()}});
+  } else if (op == QLatin1String("drop")) {
+    // A drop as a drag from another app (paths) or from the gallery's selection (internal) delivers it: enter, move,
+    // a pause of holdMs, then the drop. Target: "gallery", or an album for the sidebar row.
+    auto *mime = new QMimeData;
+    QList<QUrl> urls;
+    for (const QJsonValue &p : c.value(QLatin1String("paths")).toArray()) {
+      if (!QaFence::inside(p.toString(), fence_)) {
+        delete mime;
+        return fail(id, QStringLiteral("drop fence"));
+      }
+      urls << QUrl::fromLocalFile(p.toString());
+    }
+    if (!urls.isEmpty()) mime->setUrls(urls);
+    if (c.value(QLatin1String("internal")).toBool()) mime->setData(QStringLiteral("application/x-room237"), QByteArray::number(w_->gallery()->selectionCount()));
+    const int hold = c.value(QLatin1String("holdMs")).toInt(150);
+    const QString target = str("target");
+    QWidget *widget;
+    QPoint at;
+    Qt::DropActions actions = Qt::CopyAction | Qt::MoveAction;
+    if (target == QLatin1String("gallery")) {
+      widget = w_->gallery()->viewport();
+      at = widget->rect().center();
+      actions = Qt::CopyAction;
+    } else {
+      const AlbumInfo *a = qaAlbum(w_->model(), target);
+      if (!a) {
+        delete mime;
+        return fail(id, QStringLiteral("album missing"));
+      }
+      widget = w_->tree()->viewport();
+      at = w_->tree()->rectFor(a->id).center();
+    }
+    sendDrop(widget, at, mime, actions, hold, [=, this] { reply(id, QJsonObject{{QStringLiteral("ms"), ms()}}); });
+  } else if (op == QLatin1String("confirm_panel")) {
+    // Answers an open confirmation by its object name: "accept", "secondary" or "cancel".
+    const QString name = str("name"), choice = str("choice");
+    const auto find = [this, name]() -> ConfirmPanel * {
+      for (auto *panel : w_->overlayHost()->findChildren<ConfirmPanel *>())
+        if (panel->isOpen() && panel->objectName() == name) return panel;
+      return nullptr;
+    };
+    until([find] { return find() != nullptr; }, c.value(QLatin1String("timeout")).toInt(3000), [=, this](bool ok) {
+      if (!ok) return fail(id, QStringLiteral("no open panel ") + name);
+      find()->qaChoose(choice);
+      reply(id, QJsonObject{{QStringLiteral("ms"), ms()}});
+    });
   } else if (op == QLatin1String("set_cache_budget")) {
     w_->pipeline()->setBudget(qint64(c.value(QLatin1String("bytes")).toDouble()));
     reply(id, QJsonValue());

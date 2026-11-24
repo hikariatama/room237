@@ -21,6 +21,10 @@ public:
   void start(const QStringList &arguments);
   void call(const QString &method, const QJsonObject &params = {}, Reply reply = {});
   QString lastError() const { return lastError_; }
+#ifdef ROOM237_QA
+  // Calls per method since the last reset: count and summed worker milliseconds.
+  static QJsonObject qaStats(bool reset);
+#endif
 signals:
   void event(const QString &name, const QJsonValue &payload);
   void disconnected(const QString &message);

@@ -1,4 +1,6 @@
 #include "window.h"
+#include <QDirIterator>
+#include <QRegularExpression>
 #include "i18n.h"
 #include "platform.h"
 #include "qatrace.h"
@@ -40,7 +42,11 @@
 #include "secure_media.h"
 #include "vault_ops.h"
 static const QStringList kMediaExtensions = {QStringLiteral("jpg"), QStringLiteral("jpeg"), QStringLiteral("png"), QStringLiteral("webp"), QStringLiteral("avif"), QStringLiteral("gif"), QStringLiteral("bmp"), QStringLiteral("heic"), QStringLiteral("heif"), QStringLiteral("tif"), QStringLiteral("tiff"), QStringLiteral("mp4"), QStringLiteral("mov"), QStringLiteral("mkv"), QStringLiteral("webm"), QStringLiteral("avi"), QStringLiteral("flv"), QStringLiteral("m4v"), QStringLiteral("ogg"), QStringLiteral("ogv"), QStringLiteral("wmv"), QStringLiteral("mpg"), QStringLiteral("mpeg"), QStringLiteral("3gp"), QStringLiteral("mts"), QStringLiteral("m2ts")};
-static bool isMediaFile(const QString &path) { return kMediaExtensions.contains(QFileInfo(path).suffix().toLower()); }
+// "._name" files are AppleDouble metadata from FAT, exFAT and network volumes, not pictures.
+static bool isMediaFile(const QString &path) {
+  const QFileInfo info(path);
+  return !info.fileName().startsWith(QLatin1String("._")) && kMediaExtensions.contains(info.suffix().toLower());
+}
 // A shortcut works on a Russian layout too: the physical key stays the same.
 static bool keyIs(QKeyEvent *event, QChar latin) {
   static const QHash<QChar, QChar> cyrillic{{QLatin1Char('l'), QChar(0x0434)}, {QLatin1Char('u'), QChar(0x0433)}, {QLatin1Char('a'), QChar(0x0444)}, {QLatin1Char('c'), QChar(0x0441)}, {QLatin1Char('d'), QChar(0x0432)}, {QLatin1Char('v'), QChar(0x043C)}};
@@ -155,11 +161,18 @@ MainWindow::MainWindow(const QString &profile, const QString &root, const QStrin
   saveTimer_.setSingleShot(true);
   saveTimer_.setInterval(300);
   connect(&saveTimer_, &QTimer::timeout, this, &MainWindow::saveUiState);
+  // Files added a few at a time finish many short passes: covers and the duplicate probe follow the last one.
+  coverRefresh_.setSingleShot(true);
+  coverRefresh_.setInterval(600);
+  connect(&coverRefresh_, &QTimer::timeout, this, [this] {
+    if (albumsReady_ && !model_.root.isEmpty()) model_.refreshAlbums();
+  });
+  duplicateProbe_.setSingleShot(true);
+  duplicateProbe_.setInterval(800);
+  connect(&duplicateProbe_, &QTimer::timeout, this, &MainWindow::probeDuplicates);
   inactivity_.setSingleShot(true);
   inactivity_.setInterval(5 * 60 * 1000);
-  connect(&inactivity_, &QTimer::timeout, this, [this] {
-    if ((lockscreenEnabled_ || inProtectedRoot()) && !locked_) setLocked(true);
-  });
+  connect(&inactivity_, &QTimer::timeout, this, [this] { lockWhenIdle(); });
   windowStateTimer_.setSingleShot(true);
   windowStateTimer_.setInterval(0);
   connect(&windowStateTimer_, &QTimer::timeout, this, [this] {
@@ -463,8 +476,9 @@ void MainWindow::buildContent() {
   connect(tree_, &AlbumTree::albumDropped, this, [this](const QString &album, const QString &parent) {
     const QString name = album.section(QLatin1Char('/'), -1);
     moveAlbum(album, parent, [this, name](const QString &error) {
-      if (!error.isEmpty()) showToast(1, t("toast.albumMoveFailed") + QStringLiteral(": ") + error);
-      else showToast(0, t("toast.albumMoved", {{"album", name}}));
+      if (error.isEmpty()) return showToast(0, t("toast.albumMoved", {{"album", name}}));
+      qWarning("move album: %s", qPrintable(error));
+      showToast(1, error.contains(QLatin1String("already exists")) ? t("toast.albumExists", {{"album", name}}) : t("toast.albumMoveFailed"));
     });
   });
   connect(tree_, &AlbumTree::dragHint, this, [this](const QString &text, const QPoint &global) {
@@ -526,7 +540,9 @@ void MainWindow::buildContent() {
       showToast(0, t("toast.pathCopied"));
     }, [this, album] {
       deleteAlbum(album.id, [this](const QString &error) {
-        if (!error.isEmpty()) showToast(1, error);
+        if (error.isEmpty()) return;
+        qWarning("delete album: %s", qPrintable(error));
+        showToast(1, t("toast.albumDeleteFailed"));
       });
     });
     panel->setTrigger(albumMenuButton_);
@@ -686,7 +702,7 @@ void MainWindow::onEvent(const QString &name, const QJsonValue &payload) {
     if (finished || o.value(QLatin1String("stage")).toString() == QLatin1String("idle")) {
       preload_->finish();
       // Album covers exist only after their previews; the tree listed before indexing shows none.
-      if (preloadRunning_ && albumsReady_) model_.refreshAlbums();
+      if (preloadRunning_ && albumsReady_) coverRefresh_.start();
       preloadRunning_ = false;
     } else {
       preloadRunning_ = true;
@@ -700,7 +716,7 @@ void MainWindow::updateHashing() {
   const bool active = hashTotal_ - hashDone_ > 3;
   hashPill_->setVisible(active);
   if (active) hashPill_->setProgress(QStringLiteral("%1 %2%").arg(t("albums.hashing")).arg(hashDone_ * 100 / qMax(1, hashTotal_)), double(hashDone_) / qMax(1, hashTotal_));
-  else if (hashTotal_ > 0 && hashDone_ >= hashTotal_) probeDuplicates();
+  else if (hashTotal_ > 0 && hashDone_ >= hashTotal_) duplicateProbe_.start();
 }
 void MainWindow::onSettings(const QJsonObject &settings) {
   const QJsonObject preload = settings.value(QLatin1String("preload")).toObject();
@@ -1338,6 +1354,8 @@ void MainWindow::reconcileNow() {
   }
   const qint64 now = reconcileClock_.elapsed();
   for (const QString &album : albums) {
+    // The operation changing this album reconciles it when it ends.
+    if (busyAlbums_.contains(album)) continue;
     // A busy indexer rewrites its lock files; one check per second per album is enough.
     if (now - lastReconcile_.value(album, -10000) < 1000) {
       reconcileAlbums_.insert(album);
@@ -1352,6 +1370,14 @@ void MainWindow::reconcileNow() {
         if ((album == model_.album && model_.albumById(album)) || model_.favoritesAlbum) model_.reload({}, true);
       });
     });
+  }
+}
+void MainWindow::markBusy(const QStringList &albums, int delta) {
+  for (const QString &album : albums) {
+    if (album.isEmpty()) continue;
+    const int count = busyAlbums_.value(album) + delta;
+    if (count > 0) busyAlbums_.insert(album, count);
+    else busyAlbums_.remove(album);
   }
 }
 void MainWindow::afterMutation(const QStringList &albums, std::function<void()> done) {
@@ -1390,6 +1416,7 @@ void MainWindow::moveItems(const QVector<MediaItem> &items, const QString &targe
     byAlbum[item.albumPath].push_back(item);
     if (!touched.contains(item.albumId)) touched << item.albumId;
   }
+  markBusy(touched, 1);
   auto batches = std::make_shared<QVector<QVector<MediaItem>>>();
   for (auto it = byAlbum.cbegin(); it != byAlbum.cend(); ++it)
     for (int i = 0; i < it.value().size(); i += 300) batches->push_back(it.value().mid(i, 300));
@@ -1397,6 +1424,7 @@ void MainWindow::moveItems(const QVector<MediaItem> &items, const QString &targe
   auto finish = [this, done, toast, count, touched](const QString &error) {
     if (error.isEmpty()) toasts_->update(toast, ToastHost::Success, I18n::n("toast.moveMedia.success", count));
     else toasts_->update(toast, ToastHost::Error, I18n::n("toast.moveMedia.failed", count));
+    markBusy(touched, -1);
     afterMutation(touched, [this, done, error] {
       gallery_->settleRemoval();
       if (done) done(error);
@@ -1442,10 +1470,12 @@ void MainWindow::deleteItems(const QVector<MediaItem> &items, std::function<void
     for (int i = 0; i < it.value().size(); i += 128) queue->push_back({it.key(), it.value().mid(i, 128)});  // Core DELETE_BATCH_LIMIT.
     touched << QDir(model_.root).relativeFilePath(it.key());
   }
+  markBusy(touched, 1);
   auto step = std::make_shared<std::function<void(int)>>();
   auto finish = [this, done, toast, count, touched](const QString &error) {
     if (error.isEmpty()) toasts_->update(toast, ToastHost::Success, I18n::n("toast.deleteMedia.success", count));
     else toasts_->update(toast, ToastHost::Error, I18n::n("toast.deleteMedia.failed", count));
+    markBusy(touched, -1);
     afterMutation(touched, [this, done, error] {
       gallery_->settleRemoval();
       if (done) done(error);
@@ -1472,28 +1502,159 @@ void MainWindow::deleteItems(const QVector<MediaItem> &items, std::function<void
   };
   (*step)(0);
 }
+// An album name: not empty, no leading dot, no path separators or colon, no trailing dot or space, and none of the
+// names Windows reserves (a library can move to another system).
+// Empty when the name is fine; otherwise what is wrong with it.
+static QString albumNameProblem(const QString &name) {
+  if (name.isEmpty()) return t("albumName.empty");
+  if (name.startsWith(QLatin1Char('.'))) return t("albumName.dot");
+  for (const QChar c : name)
+    if (c == QLatin1Char('/') || c == QLatin1Char('\\') || c == QLatin1Char(':') || c.unicode() < 0x20) return t("albumName.chars");
+  if (name.endsWith(QLatin1Char('.')) || name.endsWith(QLatin1Char(' '))) return t("albumName.end");
+  static const QRegularExpression reserved(QStringLiteral("^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\\..*)?$"), QRegularExpression::CaseInsensitiveOption);
+  if (reserved.match(name).hasMatch()) return t("albumName.reserved", {{"album", name}});
+  return {};
+}
+static bool validAlbumName(const QString &name) { return albumNameProblem(name).isEmpty(); }
+// A dropped folder's name as an album name.
+static QString albumNameForFolder(QString name) {
+  for (QChar &c : name)
+    if (c == QLatin1Char('/') || c == QLatin1Char('\\') || c == QLatin1Char(':') || c.unicode() < 0x20) c = QLatin1Char('_');
+  while (name.endsWith(QLatin1Char('.')) || name.endsWith(QLatin1Char(' '))) name.chop(1);
+  if (name.isEmpty()) name = QStringLiteral("_");
+  if (!validAlbumName(name)) name += QLatin1Char('_');
+  return name;
+}
+// Files to add, by album folder relative to the target album (empty: the album itself).
+using ImportJobs = QMap<QString, QStringList>;
+struct ImportPlan {
+  ImportJobs files, hidden;
+  bool own = false;
+  int count() const {
+    int n = 0;
+    for (const QStringList &list : files) n += list.size();
+    return n;
+  }
+};
 void MainWindow::importPaths(const QStringList &paths, const QString &albumId, std::function<void(QString)> done) {
   const AlbumInfo *album = model_.albumById(albumId);
   if (!album) {
     if (done) done(QStringLiteral("album missing"));
     return;
   }
-  QStringList media;
-  for (const QString &path : paths)
-    if (isMediaFile(path) && QFileInfo(path).isFile()) media << path;
-  if (media.isEmpty()) {
-    showToast(1, t("toast.noFilesAdded"));
-    if (done) done(QStringLiteral("no media"));
+  // Loose files go into the album. A dropped folder becomes an album of the same name inside it, and its subfolders
+  // albums inside that one. Hidden entries of a folder, linked folders and the app's own folders are skipped; a
+  // dropped hidden file is added only when the user says so. At most kFolderImportLimit files are taken.
+  constexpr int kFolderImportLimit = 20000;
+  const QString albumDir = QFileInfo(album->path).canonicalFilePath();
+  // Folders of the library itself are moved in the sidebar, not copied into an album.
+  const QString library = QFileInfo(model_.root).canonicalFilePath() + QLatin1Char('/');
+  auto plan = std::make_shared<ImportPlan>();
+  int taken = 0;
+  const auto take = [&](const QString &relative, const QString &file) {
+    const QFileInfo info(file);
+    const QString name = info.fileName();
+    if (taken >= kFolderImportLimit || !isMediaFile(file) || !info.isFile()) return;
+    taken++;
+    (name.startsWith(QLatin1Char('.')) ? plan->hidden : plan->files)[relative] << file;
+  };
+  for (const QString &path : paths) {
+    const QFileInfo info(path);
+    if (info.isSymLink() && info.isDir()) continue;
+    if (!info.isDir()) {
+      // A file dropped back onto its own album is already there.
+      if (QFileInfo(info.absolutePath()).canonicalFilePath() == albumDir) {
+        plan->own = true;
+        continue;
+      }
+      take(QString(), path);
+      continue;
+    }
+    const QString folder = info.canonicalFilePath();
+    if ((folder + QLatin1Char('/')).startsWith(library)) {
+      plan->own = true;
+      continue;
+    }
+    const QString base = albumNameForFolder(info.fileName());
+    QDirIterator it(folder, QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    while (it.hasNext() && taken < kFolderImportLimit) {
+      const QString file = it.next();
+      const QString inside = QDir(folder).relativeFilePath(QFileInfo(file).absolutePath());
+      QStringList parts{base};
+      bool hiddenFolder = false;
+      if (inside != QLatin1String("."))
+        for (const QString &part : inside.split(QLatin1Char('/'))) {
+          hiddenFolder |= part.startsWith(QLatin1Char('.'));
+          parts << albumNameForFolder(part);
+        }
+      if (hiddenFolder || file.startsWith(library)) continue;
+      take(parts.join(QLatin1Char('/')), file);
+    }
+  }
+  if (plan->files.isEmpty() && plan->hidden.isEmpty()) {
+    if (!plan->own) showToast(1, t("toast.noFilesAdded"));
+    if (done) done(plan->own ? QString() : QStringLiteral("no media"));
     return;
   }
-  const int count = media.size();
-  const int toast = toasts_->show(ToastHost::Loading, I18n::n("toast.addingToAlbum", count));
+  if (plan->hidden.isEmpty()) return runImport(*plan, albumId, std::move(done));
+  // Hidden files stay hidden in the file manager after they are added: the user decides.
+  QStringList names;
+  int hiddenCount = 0;
+  for (const QStringList &list : plan->hidden) {
+    hiddenCount += list.size();
+    for (const QString &file : list)
+      if (names.size() < 3) names << QFileInfo(file).fileName();
+  }
+  const QString files = names.join(QStringLiteral(", ")) + (hiddenCount > names.size() ? QStringLiteral("…") : QString());
+  auto *panel = new ConfirmPanel(host_, t("import.hidden.title"), I18n::n("import.hidden.detail", hiddenCount, {{"files", files}, {"fileManager", Platform::fileManagerName()}}), t("import.hidden.add"),
+                                 [this, plan, albumId, done] {
+                                   ImportPlan all = *plan;
+                                   for (auto it = plan->hidden.cbegin(); it != plan->hidden.cend(); ++it) all.files[it.key()] << it.value();
+                                   runImport(all, albumId, done);
+                                 }, false);
+  panel->setObjectName(QStringLiteral("hiddenFiles"));
+  panel->addSecondary(t("import.hidden.skip"), [this, plan, albumId, done] {
+    if (plan->files.isEmpty()) {
+      if (done) done(QStringLiteral("no media"));
+      return;
+    }
+    runImport(*plan, albumId, done);
+  });
+  panel->setFixedPanelWidth(360);
+  openCentered(panel);
+}
+void MainWindow::runImport(const ImportPlan &plan, const QString &albumId, std::function<void(QString)> done) {
+  const AlbumInfo *album = model_.albumById(albumId);
+  if (!album) {
+    if (done) done(QStringLiteral("album missing"));
+    return;
+  }
   const QString directory = album->path;
+  // Album folders for dropped folders; an existing album of the same name takes the files.
+  QVector<std::pair<QString, QStringList>> batches;  // Album folder and up to 32 files of it.
+  QStringList touched{albumId};
+  int count = 0, unplaced = 0;
+  QStringList unplacedNames;
+  for (auto it = plan.files.cbegin(); it != plan.files.cend(); ++it) {
+    const QString target = it.key().isEmpty() ? directory : QDir(directory).filePath(it.key());
+    if (!it.key().isEmpty() && (!rootAllowed(directory) || !QDir().mkpath(target))) {
+      unplaced += it.value().size();
+      for (const QString &file : it.value())
+        if (unplacedNames.size() < 3) unplacedNames << QFileInfo(file).fileName();
+      continue;
+    }
+    if (!it.key().isEmpty()) touched << QDir(model_.root).relativeFilePath(target);
+    for (int i = 0; i < it.value().size(); i += 32) batches.push_back({target, it.value().mid(i, 32)});
+    count += it.value().size();
+  }
+  count += unplaced;
+  const int toast = toasts_->show(ToastHost::Loading, I18n::n("toast.addingToAlbum", count));
+  markBusy(touched, 1);
   auto step = std::make_shared<std::function<void(int)>>();
-  auto failed = std::make_shared<int>(0);
-  auto failedNames = std::make_shared<QStringList>();
-  *step = [=, this](int offset) {
-    if (offset >= media.size()) {
+  auto failed = std::make_shared<int>(unplaced);
+  auto failedNames = std::make_shared<QStringList>(unplacedNames);
+  *step = [=, this](int index) {
+    if (index >= batches.size()) {
       QTimer::singleShot(0, [step] { *step = nullptr; });
       const int added = count - *failed;
       if (*failed == 0 && inProtectedRoot()) {
@@ -1504,15 +1665,16 @@ void MainWindow::importPaths(const QStringList &paths, const QString &albumId, s
       } else if (*failed == 0) toasts_->update(toast, ToastHost::Success, I18n::n("toast.addedFiles", added));
       else if (added > 0) toasts_->update(toast, ToastHost::Error, t("toast.partialImport", {{"added", QString::number(added)}, {"failed", QString::number(*failed)}, {"files", failedNames->mid(0, 3).join(QStringLiteral(", "))}}));
       else toasts_->update(toast, ToastHost::Error, t("toast.noFilesAdded"));
+      markBusy(touched, -1);
       afterMutation({albumId}, [done, failed] {
         if (done) done(*failed ? QStringLiteral("failed %1").arg(*failed) : QString());
       });
       return;
     }
+    const auto &[target, batch] = batches.at(index);
     QJsonArray files;
-    const QStringList batch = media.mid(offset, 32);
     for (const QString &path : batch) files.push_back(QJsonObject{{QStringLiteral("name"), QFileInfo(path).fileName()}, {QStringLiteral("sourcePath"), path}});
-    core_.call(QStringLiteral("add_media_files"), {{QStringLiteral("dir"), directory}, {QStringLiteral("files"), files}}, [=, this](const QJsonValue &result, const QString &error) {
+    core_.call(QStringLiteral("add_media_files"), {{QStringLiteral("dir"), target}, {QStringLiteral("files"), files}}, [=, this](const QJsonValue &result, const QString &error) {
       for (const auto &row : result.toObject().value(QLatin1String("failed")).toArray()) {
         (*failed)++;
         *failedNames << row.toObject().value(QLatin1String("name")).toString();
@@ -1520,8 +1682,11 @@ void MainWindow::importPaths(const QStringList &paths, const QString &albumId, s
       if (!error.isEmpty()) {
         qWarning("import: %s", qPrintable(error));
         *failed += batch.size();
+      } else if (target == directory && albumId == model_.album && index + 1 < batches.size()) {
+        // Files of a long import show up batch by batch; the catalog already lists them.
+        model_.reload({}, true);
       }
-      (*step)(offset + batch.size());
+      (*step)(index + 1);
     });
   };
   (*step)(0);
@@ -1578,8 +1743,8 @@ void MainWindow::createAlbum(const QString &parentPath, const QString &name, std
     return;
   }
   const QString cleaned = name.trimmed();
-  if (cleaned.isEmpty() || cleaned.contains(QLatin1Char('/')) || cleaned.contains(QLatin1Char('\\')) || cleaned.startsWith(QLatin1Char('.'))) {
-    showToast(1, t("toast.albumNameInvalid"));
+  if (const QString problem = albumNameProblem(cleaned); !problem.isEmpty()) {
+    showToast(1, problem);
     if (done) done();
     return;
   }
@@ -1759,8 +1924,15 @@ void MainWindow::showAlbumMenu(const QString &albumId, QPoint global) {
     auto holder = std::make_shared<QPointer<TextPrompt>>();
     auto *dialog = new TextPrompt(host_, t("album.rename"), t("common.save"), album.name, [this, holder, album](const QString &name) {
       if (*holder) (*holder)->closeNow();
-      renameAlbum(album.id, name, [this](const QString &error) {
-        if (!error.isEmpty()) showToast(1, error);
+      const QString cleaned = name.trimmed();
+      if (const QString problem = albumNameProblem(cleaned); !problem.isEmpty()) {
+        showToast(1, problem);
+        return;
+      }
+      renameAlbum(album.id, cleaned, [this, cleaned](const QString &error) {
+        if (error.isEmpty()) return;
+        qWarning("rename album: %s", qPrintable(error));
+        showToast(1, error.contains(QLatin1String("already exists")) ? t("toast.albumExists", {{"album", cleaned}}) : t("toast.albumRenameFailed"));
       });
     });
     *holder = dialog;
@@ -1796,7 +1968,9 @@ void MainWindow::showAlbumMenu(const QString &albumId, QPoint global) {
   MenuItem remove{"trash", t("common.delete") + QStringLiteral("…"), [this, album, anchor] {
     auto *panel = new ConfirmPanel(host_, t("album.deleteNamed", {{"album", album.name}}), t("album.deleteDescription"), t("common.delete"), [this, album] {
       deleteAlbum(album.id, [this](const QString &error) {
-        if (!error.isEmpty()) showToast(1, error);
+        if (error.isEmpty()) return;
+        qWarning("delete album: %s", qPrintable(error));
+        showToast(1, t("toast.albumDeleteFailed"));
       });
     });
     panel->setActionIcon("trash");
@@ -2154,6 +2328,15 @@ void MainWindow::onVaultUnlocked(bool decoy) {
   openRoot(root);
   // The recovery key stands in for a factor that no longer works here.
   if (recovered) QTimer::singleShot(0, this, &MainWindow::replaceFactor);
+}
+void MainWindow::lockWhenIdle() {
+  if (!(lockscreenEnabled_ || inProtectedRoot()) || locked_ || inactivity_.isActive()) return;
+  // Locking stops an encryption pass halfway and leaves plain files on disk: the lock waits for the pass to end.
+  if (vaultPass_) {
+    QTimer::singleShot(10000, this, &MainWindow::lockWhenIdle);
+    return;
+  }
+  setLocked(true);
 }
 void MainWindow::dropVaultPass() {
   vaultPass_ = false;

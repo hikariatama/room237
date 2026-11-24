@@ -3,6 +3,8 @@
 // QA-only controller client; inactive unless ROOM237_QA_PORT is set.
 #include "window.h"
 #include <QTcpSocket>
+#include <QMimeData>
+#include <QTimer>
 class QaDriver : public QObject {
   Q_OBJECT
 public:
@@ -28,5 +30,14 @@ private:
   bool recordingDup_ = false;
   QElapsedTimer recordClock_, heartbeatClock_;
   QTimer heartbeat_;
+  // Diagnostics: paint events per widget class and model signals since the last "diag" reset; frame capture.
+  QHash<QString, int> paints_, modelEvents_;
+  QTimer film_;
+  QString filmDir_;
+  int filmIndex_ = 0;
+  double filmScale_ = 0.5;
+  QElapsedTimer filmClock_;
+  void countModel(const char *name, const QString &detail = {});
+  void sendDrop(QWidget *target, QPoint at, QMimeData *mime, Qt::DropActions actions, int holdMs, std::function<void()> done);
   GalleryView::Visible anyVisible(QVector<QPair<QString, bool>> *keys = nullptr);
 };

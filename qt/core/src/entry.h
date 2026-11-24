@@ -68,6 +68,7 @@ struct DetachedMediaEntry {
   std::optional<QString> thumbnailName;
   std::optional<bool> favorite;
   std::optional<QString> displayName;  // The original name when the stored one is the random name of an encrypted file.
+  bool thumbFailed = false;  // No preview can be made from the current file.
   QJsonObject toJson() const;
 };
 

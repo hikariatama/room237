@@ -144,6 +144,7 @@ public:
   const QString &path() const { return path_; }
   void write(const QByteArray &bytes);
   void sync();
+  void syncOrdered();  // See syncOpenedFileOrdered.
   qint64 size() const;
   void persist(const QString &target);  // Replaces the target.
   void persistNoClobber(const QString &target);

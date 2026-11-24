@@ -63,9 +63,11 @@ ConfirmPanel::ConfirmPanel(QWidget *host, const QString &title, const QString &d
   layout->addWidget(heading_);
   layout->addWidget(detail_);
   auto *buttons = new QHBoxLayout;
+  buttons_ = buttons;
   buttons->addStretch();
   buttons->setSpacing(8);
   auto *cancel = new TextButton(t("common.cancel"), TextButton::Outline);
+  cancel_ = cancel;
   accept_ = new TextButton(actionText, dangerous ? TextButton::Danger : TextButton::Primary);
   auto *accept = accept_;
   cancel->setSmall(true);
@@ -81,6 +83,21 @@ ConfirmPanel::ConfirmPanel(QWidget *host, const QString &title, const QString &d
   });
   connect(this, &Popover::closed, this, &QObject::deleteLater);
 }
+void ConfirmPanel::addSecondary(const QString &text, std::function<void()> chosen) {
+  secondary_ = new TextButton(text, TextButton::Outline);
+  secondary_->setSmall(true);
+  buttons_->insertWidget(buttons_->indexOf(accept_), secondary_);
+  connect(secondary_, &QAbstractButton::clicked, this, [this, chosen = std::move(chosen)] {
+    closeNow();
+    chosen();
+  });
+}
+#ifdef ROOM237_QA
+void ConfirmPanel::qaChoose(const QString &choice) {
+  TextButton *button = choice == QLatin1String("secondary") ? secondary_ : choice == QLatin1String("cancel") ? cancel_ : accept_;
+  if (button) button->click();
+}
+#endif
 void ConfirmPanel::setActionIcon(const QByteArray &icon) {
   accept_->setIcon(icon);
   accept_->setFixedWidth(accept_->sizeHint().width());

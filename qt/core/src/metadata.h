@@ -79,6 +79,10 @@ struct CachedHash {
 };
 std::optional<CachedHash> loadAlbumFileHash(const QString &path);
 void writeAlbumFileHash(const QString &path, const QString &hashB64, const QString &hashVersion, quint32 hashBits, const QString &expectedRevision);
+// writeThumbState for a file whose bytes match the stored preview source under a new identity (a copied or restored
+// library): stored metadata and hash whose time and size still match are kept for the new revision.
+void writeThumbStateForSameContent(const QString &path, const QString &thumbVersion, const QString &expectedSource, const QString &sourceHash, const QString &hashRevision,
+                                   const QString &blurPreview, const QString &metadataVersion);
 void writeThumbState(const QString &path, const QString &thumbVersion, const QString &expectedSource, std::optional<QString> sourceHash, std::optional<QString> hashRevision, std::optional<QString> blurPreview);
 
 struct StoredMetadata {

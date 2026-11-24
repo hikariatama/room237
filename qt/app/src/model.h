@@ -7,7 +7,7 @@
 struct MediaItem {
   // name is the file on disk; in an encrypted root a random one, with the original in displayName.
   QString name, revision, albumPath, albumId, albumName, thumbName, blur, displayName;
-  bool favorite = false, isVideo = false;
+  bool favorite = false, isVideo = false, thumbFailed = false;
   int width = 0, height = 0;
   double dateAdded = 0, dateTaken = 0;
   QString path() const { return albumPath + QLatin1Char('/') + name; }

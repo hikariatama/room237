@@ -1,4 +1,5 @@
 #pragma once
+#include <QElapsedTimer>
 // Full-window screens: choose folder, confirm open, lock, debugger, indexing, startup.
 #include "widgets.h"
 #include <QLabel>
@@ -112,7 +113,9 @@ private:
   int thumbsDone_ = 0, thumbsTotal_ = 0, metaDone_ = 0, metaTotal_ = 0, vaultDone_ = 0, vaultTotal_ = 0;
   bool preloading_ = false, vault_ = false;
   QString vaultTitle_;
+  int remaining() const;
   QTimer showDelay_, idle_, frostTimer_;
+  QElapsedTimer shownAt_;
   QPixmap frost_;
   QVariantAnimation fade_, spin_;
   qreal opacity_ = 0;

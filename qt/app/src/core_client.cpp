@@ -11,6 +11,7 @@
 #include <QPointer>
 #include <mutex>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <utility>
 CoreClient::CoreClient(QObject *parent) : QObject(parent) {
   // Requests run concurrently; admission is bounded so a scrolling client cannot build an unbounded work queue.
@@ -21,7 +22,20 @@ namespace {
 // Core calls in flight, for the report at exit.
 std::mutex runningMutex;
 QHash<qint64, QString> running;
+#ifdef ROOM237_QA
+std::mutex statsMutex;
+QHash<QString, std::pair<int, double>> stats;
+#endif
 }  // namespace
+#ifdef ROOM237_QA
+QJsonObject CoreClient::qaStats(bool reset) {
+  std::lock_guard lock(statsMutex);
+  QJsonObject out;
+  for (auto it = stats.cbegin(); it != stats.cend(); ++it) out.insert(it.key(), QJsonObject{{QStringLiteral("count"), it->first}, {QStringLiteral("ms"), it->second}});
+  if (reset) stats.clear();
+  return out;
+}
+#endif
 CoreClient::~CoreClient() {
   core::host::setEventSink({});
   pool_.clear();
@@ -115,11 +129,24 @@ void CoreClient::run(const QString &method, const QJsonObject &params, Reply rep
       std::lock_guard lock(runningMutex);
       running.insert(id, method);
     }
+#ifdef ROOM237_QA
+    QElapsedTimer spent;
+    spent.start();
+#endif
     try {
       result = core::dispatch(method, params);
     } catch (const std::exception &e) {
       error = QString::fromUtf8(e.what());
     }
+#ifdef ROOM237_QA
+    {
+      std::lock_guard lock(statsMutex);
+      auto &entry = stats[method];
+      entry.first++;
+      entry.second += spent.nsecsElapsed() / 1e6;
+    }
+    if (gQaTraceOn) qaTrace("core-done", QStringLiteral("%1 %2 ms=%3").arg(id).arg(method).arg(spent.nsecsElapsed() / 1e6, 0, 'f', 1));
+#endif
     {
       std::lock_guard lock(runningMutex);
       running.remove(id);

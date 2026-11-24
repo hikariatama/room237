@@ -315,7 +315,7 @@ QString ensureThumbWithSettings(const QString &path, const QString &thumbDir, co
   // A timestamp, inode or external attribute change alone needs no decoding.
   if (isFile(thumb) && cached && cached->thumbVersion == version && cached->thumbSourceHash == hash && (cached->blurPreview || !keys)) {
     const QString blur = cached->blurPreview ? *cached->blurPreview : backfillBlurPreview(thumb, settings);
-    metadata::writeThumbState(path, version, *source, hash, hashRevision, blur);
+    metadata::writeThumbStateForSameContent(path, version, *source, hash, *hashRevision, blur, settings.metadataVersion());
     return thumb;
   }
   if (keys && vault::isEncryptedFile(path)) {

@@ -380,6 +380,14 @@ FileInfo openedFileInfo(const QFile &file) {
 #endif
   return out;
 }
+void syncOpenedFileOrdered(QFile &file) {
+#ifdef Q_OS_MACOS
+  if (!file.flush()) fail(file.errorString());
+  if (fcntl(file.handle(), F_BARRIERFSYNC) != 0 && fsync(file.handle()) != 0) fail(QStringLiteral("Cannot sync admitted file"));
+#else
+  syncOpenedFile(file);
+#endif
+}
 void syncOpenedFile(QFile &file) {
   if (!file.flush()) fail(file.errorString());
 #ifdef Q_OS_WIN

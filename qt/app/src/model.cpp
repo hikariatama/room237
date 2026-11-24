@@ -19,6 +19,7 @@ MediaItem mediaFromJson(const QJsonObject &o) {
   m.dateAdded = o.value(QLatin1String("dateAdded")).toDouble();
   m.dateTaken = o.value(QLatin1String("dateTaken")).toDouble();
   m.displayName = o.value(QLatin1String("displayName")).toString();
+  m.thumbFailed = o.value(QLatin1String("thumbFailed")).toBool();
   return m;
 }
 QString MediaItem::extension() const { return QFileInfo(label()).suffix().toLower(); }
@@ -332,7 +333,12 @@ void GalleryModel::loadAll(std::function<void(QVector<MediaItem>)> done) {
   auto out = std::make_shared<QVector<MediaItem>>();
   auto step = std::make_shared<std::function<void(int)>>();
   *step = [this, out, step, done = std::move(done)](int page) {
-    core_->call(QStringLiteral("get_media_page"), {{QStringLiteral("query"), query(page)}}, [out, step, done, page](const QJsonValue &result, const QString &) {
+    core_->call(QStringLiteral("get_media_page"), {{QStringLiteral("query"), query(page)}}, [out, step, done, page](const QJsonValue &result, const QString &error) {
+      // Paged requests share a newest-wins slot in the core: a page taken by another request is asked for again.
+      if (error.contains(QLatin1String("superseded"))) {
+        QTimer::singleShot(20, [step, page] { if (*step) (*step)(page); });
+        return;
+      }
       const QJsonObject o = result.toObject();
       const QJsonArray rows = o.value(QLatin1String("items")).toArray();
       for (const auto &row : rows) out->push_back(mediaFromJson(row.toObject()));

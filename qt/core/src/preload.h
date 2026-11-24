@@ -9,6 +9,8 @@ enum class TaskPriority { High, Low };
 bool enqueueThumbTask(const QString &path, const QString &thumbDir, bool totalsAccounted, TaskPriority priority);
 bool enqueueMetaTask(const QString &path, bool totalsAccounted, TaskPriority priority);
 void enqueuePreload(const QString &dir);
+// Files found new or changed in an album outside a full pass: previews and metadata first, hashes after them.
+void enqueueChangedFiles(const QString &dir, const QStringList &paths);
 void dropPreloadForPath(const QString &prefix);
 bool setActiveRoot(const QString &root);
 void startPreloaderWorker();

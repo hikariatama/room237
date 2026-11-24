@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QLabel>
 class QVBoxLayout;
+class QHBoxLayout;
 class TextPrompt : public Popover {
   Q_OBJECT
 public:
@@ -21,9 +22,15 @@ public:
   ConfirmPanel(QWidget *host, const QString &title, const QString &description, const QString &actionText, std::function<void()> accepted, bool dangerous = true, Surface surface = PopoverSurface);
   void setFixedPanelWidth(int width);
   void setActionIcon(const QByteArray &icon);
+  // A second choice between Cancel and the action.
+  void addSecondary(const QString &text, std::function<void()> chosen);
+#ifdef ROOM237_QA
+  void qaChoose(const QString &choice);  // "accept", "secondary" or "cancel".
+#endif
 private:
   QLabel *heading_, *detail_;
-  TextButton *accept_;
+  TextButton *accept_, *cancel_ = nullptr, *secondary_ = nullptr;
+  QHBoxLayout *buttons_ = nullptr;
 };
 class DeleteSubmenu : public Popover {
   Q_OBJECT

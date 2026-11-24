@@ -93,11 +93,15 @@ std::vector<ObservedMedia> ObservedMedia::fromJson(const QJsonValue &value) {
   return out;
 }
 
+// Before a move: the files are the ones the listing showed. A preview built or rebuilt since then is no change of
+// the file, so only the source part of the listed revision (source revision, "-", preview revision) is compared.
 void validateMediaRevisions(const std::vector<ObservedMedia> &observed) {
   bool stale = observed.empty();
-  for (const ObservedMedia &item : observed)
-    if (item.revision.isEmpty() || !isFile(item.path) || mediaRevision(item.path) != item.revision) stale = true;
-  if (stale) fail(QStringLiteral("Media changed; refresh duplicates before deleting."));
+  for (const ObservedMedia &item : observed) {
+    const std::optional<QString> source = isFile(item.path) ? sourceRevision(item.path) : std::nullopt;
+    if (item.revision.isEmpty() || !source || !item.revision.startsWith(*source + QLatin1Char('-'))) stale = true;
+  }
+  if (stale) fail(QStringLiteral("Media changed since it was listed"));
 }
 
 void deleteMediaIfUnchanged(const QString &path, const QString &revision, const std::vector<ObservedMedia> &observed) { media_delete::deleteIfUnchanged(path, revision, observed); }
@@ -638,6 +642,37 @@ void writeThumbState(const QString &path, const QString &thumbVersion, const QSt
   });
 }
 
+namespace {
+// Revisions are "mtime-size-inode" (media revisions: the source's, "-", the preview's or "missing"). A copy keeps
+// the modification time and size and gets a new inode.
+bool sameTimeAndSize(const std::optional<QString> &stored, const QString &current, int offset = 0) {
+  if (!stored) return false;
+  const QStringList a = stored->split(QLatin1Char('-')), b = current.split(QLatin1Char('-'));
+  return a.size() > offset + 2 && b.size() > offset + 2 && a[offset] == b[offset] && a[offset + 1] == b[offset + 1];
+}
+}  // namespace
+
+void writeThumbStateForSameContent(const QString &path, const QString &thumbVersion, const QString &expectedSource, const QString &sourceHash, const QString &hashRevision,
+                                   const QString &blurPreview, const QString &metadataVersion) {
+  if (sourceRevision(path) != expectedSource) fail(QStringLiteral("Media changed during thumbnail generation"));
+  const QString media = mediaRevision(path);
+  const auto embedded = embeddedTimestampRevision(path);
+  updateFileMetaIfCurrent(path, media, expectedSource, [=](FileMetaEntry &entry) {
+    entry.blurPreview = blurPreview;
+    entry.thumbSourceRevision = expectedSource;
+    entry.thumbSourceHash = sourceHash;
+    entry.thumbHashRevision = hashRevision;
+    entry.thumbVersion = thumbVersion;
+    entry.thumbFailed = false;
+    entry.thumbFailedSourceRevision.reset();
+    if (entry.meta && validPackedMeta(*entry.meta) && entry.metaSettingsVersion == metadataVersion && sameTimeAndSize(entry.metaSourceRevision, expectedSource)) {
+      entry.metaSourceRevision = expectedSource;
+      entry.metaEmbeddedRevision = embedded;
+    }
+    if (entry.hash && sameTimeAndSize(entry.hashSourceRevision, media) && sameTimeAndSize(entry.hashSourceRevision, media, 3)) entry.hashSourceRevision = media;
+  });
+}
+
 // --- Extraction --------------------------------------------------------------------------------------------------
 
 StoredMetadata getMetadataWithFavoriteWithSettings(const QString &path, const AdvancedSettings &settings) {
@@ -831,6 +866,7 @@ void invalidateMediaContent(const QString &path) {
 // --- HEIC companions ---------------------------------------------------------------------------------------------
 
 bool isImageMedia(const QString &album, const QString &name) {
+  if (!constants::isMedia(name)) return false;
   if (!constants::isEncryptedName(name)) return constants::isImageExtension(constants::lowerExtension(name));
   try {
     const auto entry = readFileEntry(path::join(album, name));

@@ -279,6 +279,8 @@ ImportResult addMediaFilesBlocking(const QString &dir, const std::vector<Incomin
       }
       fail(QStringLiteral("Too many concurrent filename collisions"));
     };
+    // Each copy is ordered before its rename; one full sync after the last makes the whole import durable.
+    QString lastPublished;
     for (const IncomingFile &file : files) {
       const QString name = file.name.trimmed();
       try {
@@ -287,6 +289,7 @@ ImportResult addMediaFilesBlocking(const QString &dir, const std::vector<Incomin
           const FileInfo info = stat(source);
           if (!info.exists) fail(QStringLiteral("No such file or directory (os error 2)"));
           if (!info.isFile) fail(QStringLiteral("Import source is not a regular file"));
+          if (info.size == 0) fail(QStringLiteral("The file is empty"));
           const QString parent = path::parent(source);
           if (path::startsWith(parent, dir) && path::startsWith(dir, parent)) {
             const QString own = path::fileName(source);
@@ -304,18 +307,27 @@ ImportResult addMediaFilesBlocking(const QString &dir, const std::vector<Incomin
             if (out.write(chunk) != chunk.size()) fail(out.errorString());
           if (in.error() != QFileDevice::NoError) fail(in.errorString());
           out.close();
-          temporary.sync();
+          temporary.syncOrdered();
           copied << persist(temporary, name);
+          lastPublished = path::join(dir, copied.last());
         } else if (file.data) {
           TempFile temporary(dir, QStringLiteral(".tmp"));
           temporary.write(*file.data);
-          temporary.sync();
+          temporary.syncOrdered();
           copied << persist(temporary, name);
+          lastPublished = path::join(dir, copied.last());
         } else {
           fail(QStringLiteral("Import file has no data or source"));
         }
       } catch (const Error &error) {
         result.failed.emplace_back(name, error.message());
+      }
+    }
+    if (!lastPublished.isEmpty()) {
+      try {
+        syncFile(lastPublished);
+      } catch (const Error &error) {
+        qWarning("Import sync failed: %s", qUtf8Printable(error.message()));
       }
     }
   }
@@ -587,7 +599,14 @@ static RenamedAlbumResult renamed(const QString &root, const QString &oldPath, c
   return result;
 }
 
-RenamedAlbumResult renameAlbum(const QString &rootDir, const QString &albumId, const QString &newName) {
+namespace {
+RenamedAlbumResult renameAlbumStep(const QString &rootDir, const QString &albumId, const QString &newName, bool cleanupOld);
+}  // namespace
+
+RenamedAlbumResult renameAlbum(const QString &rootDir, const QString &albumId, const QString &newName) { return renameAlbumStep(rootDir, albumId, newName, true); }
+
+namespace {
+RenamedAlbumResult renameAlbumStep(const QString &rootDir, const QString &albumId, const QString &newName, bool cleanupOld) {
   if (albumId.trimmed().isEmpty()) fail(QStringLiteral("Album id is required"));
   if (albumId.compare(QLatin1String("favorites"), Qt::CaseInsensitive) == 0) fail(QStringLiteral("Cannot rename favorites album"));
   const QString trimmed = newName.trimmed();
@@ -613,7 +632,19 @@ RenamedAlbumResult renameAlbum(const QString &rootDir, const QString &albumId, c
   if (parentDir.isEmpty()) fail(QStringLiteral("Cannot rename root directory"));
   if (path::fileName(*target) == safe) return renamed(root, *target, *target, parentDir, safe);
   const QString newPath = path::join(parentDir, safe);
-  if (exists(newPath)) fail(QStringLiteral("Album \"%1\" already exists in %2").arg(safe, parentDir));
+  if (exists(newPath)) {
+    // Another spelling of the same folder on a case-insensitive volume ("Trips" to "trips"): through a temporary
+    // name. The first step leaves the old name alone, which still finds the folder until the second step.
+    if (cleanupOld && directoryId(newPath) == directoryId(*target)) {
+      const QString temporary = safe + QStringLiteral(".renaming-") + toHex(vault::randomBytes(4));
+      const RenamedAlbumResult step = renameAlbumStep(root, albumId, temporary, false);
+      RenamedAlbumResult result = renameAlbumStep(root, step.newRelativePath, safe, true);
+      result.oldPath = step.oldPath;
+      result.oldRelativePath = step.oldRelativePath;
+      return result;
+    }
+    fail(QStringLiteral("Album \"%1\" already exists in %2").arg(safe, parentDir));
+  }
   auto library = filesystem.directory(root), sourceParent = filesystem.directory(parentDir);
   auto admitted = std::make_shared<Directory>(sourceParent->childForRemoval(path::fileName(*target)));
   filesystem.bindDirectory(*target, admitted);
@@ -622,7 +653,7 @@ RenamedAlbumResult renameAlbum(const QString &rootDir, const QString &albumId, c
     directory_move::move(root, *library, path::relative(*target, root), path::relative(newPath, root), *admitted);
   }
   preload::dropPreloadForPath(*target);
-  if (cleanupDelay > 0) {
+  if (cleanupDelay > 0 && cleanupOld) {
     const QString old = *target;
     const QString oldName = path::fileName(old);
     const QString parentId = sourceParent->identity(), rootId = library->identity();
@@ -642,6 +673,7 @@ RenamedAlbumResult renameAlbum(const QString &rootDir, const QString &albumId, c
   }
   return renamed(root, *target, newPath, parentDir, safe);
 }
+}  // namespace
 
 RenamedAlbumResult moveAlbum(const QString &rootDir, const QString &albumId, const std::optional<QString> &newParentId) {
   if (albumId.trimmed().isEmpty()) fail(QStringLiteral("Album id is required"));

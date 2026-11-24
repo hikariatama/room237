@@ -1,4 +1,5 @@
 #include "widgets.h"
+#include "qatrace.h"
 #include "i18n.h"
 #include <QApplication>
 #include <QAccessible>
@@ -648,6 +649,9 @@ static void focusFirstControl(QWidget *content) {
   }
 }
 void Popover::openAt(const QRect &anchor, Qt::Edge side, Qt::Alignment align) {
+#ifdef ROOM237_QA
+  qaTrace("popover-open", objectName().isEmpty() ? QString::fromLatin1(metaObject()->className()) : objectName());
+#endif
   closing_ = false;
   anchor_ = anchor;
   side_ = side;
@@ -676,6 +680,9 @@ void Popover::animateClose() {
   startMotion(false);
 }
 void Popover::closeNow() {
+#ifdef ROOM237_QA
+  qaTrace("popover-close", objectName().isEmpty() ? QString::fromLatin1(metaObject()->className()) : objectName());
+#endif
   if (!open_) return;
   open_ = false;
   closing_ = false;
@@ -1023,6 +1030,9 @@ ToastHost::Toast *ToastHost::find(int id) {
   return nullptr;
 }
 int ToastHost::show(Kind kind, const QString &text, int durationMs) {
+#ifdef ROOM237_QA
+  qaTrace("toast-show", QStringLiteral("%1 %2").arg(int(kind)).arg(text));
+#endif
   const int id = nextId_++;
   Toast toast{id, kind, text, {}, {}, {}};
   toast.animation = new QVariantAnimation(this);
@@ -1054,6 +1064,9 @@ int ToastHost::show(Kind kind, const QString &text, int durationMs) {
   return id;
 }
 int ToastHost::update(int id, Kind kind, const QString &text, int durationMs) {
+#ifdef ROOM237_QA
+  qaTrace("toast-update", QStringLiteral("%1 %2 %3").arg(id).arg(int(kind)).arg(text));
+#endif
   Toast *toast = find(id);
   if (!toast || toast->leaving) return show(kind, text, durationMs);
   toast->kind = kind;
@@ -1064,6 +1077,9 @@ int ToastHost::update(int id, Kind kind, const QString &text, int durationMs) {
   return id;
 }
 void ToastHost::dismiss(int id) {
+#ifdef ROOM237_QA
+  qaTrace("toast-dismiss", QString::number(id));
+#endif
   Toast *toast = find(id);
   if (!toast || toast->leaving) return;
   toast->leaving = true;
@@ -1086,6 +1102,9 @@ void ToastHost::remove(int id) {
   relayout();
 }
 int ToastHost::custom(const QString &text, const QByteArray &icon, const QString &action, std::function<void()> onAction) {
+#ifdef ROOM237_QA
+  qaTrace("toast-custom", text);
+#endif
   const int id = show(Info, text, 0);
   Toast *toast = find(id);
   toast->icon = icon;

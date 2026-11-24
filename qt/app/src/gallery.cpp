@@ -633,6 +633,18 @@ void GalleryView::paintTile(QPainter &painter, const QRect &rect, int index, con
   const QRect inner = rect.adjusted(1, 1, -1, -1);
   if (!picture || picture->hasAlphaChannel()) painter.fillRect(inner, QColor(23, 23, 23, 102));
   if (picture) painter.drawImage(inner, *picture);
+  if (item && item->thumbFailed && !pipeline_->has(cacheKey(*item, deviceSizeFor(index)))) {
+    // No preview can be made from this file: a crossed-out picture instead of an empty tile that looks like loading.
+    const qreal side = qBound(16.0, inner.width() / 5.0, 32.0);
+    const QRectF mark(inner.center().x() - side / 2, inner.center().y() - side / 2, side, side);
+    const QColor muted(255, 255, 255, 90);
+    Theme::drawIcon(painter, "photo", mark, muted);
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(muted, qMax(1.5, side / 12), Qt::SolidLine, Qt::RoundCap));
+    painter.drawLine(mark.topLeft() + QPointF(side * 0.12, side * 0.12), mark.bottomRight() - QPointF(side * 0.12, side * 0.12));
+    painter.restore();
+  }
   paintCorners(painter, rect);
   if (!item) return;
   const qreal ratio = viewport()->devicePixelRatioF();
@@ -1001,6 +1013,15 @@ void GalleryView::selectAll() {
   viewport()->update();
   emit selectionChanged();
 }
+#ifdef ROOM237_QA
+void GalleryView::selectForQa(const QList<int> &indices) {
+  all_ = false;
+  excluded_.clear();
+  selected_ = QSet<int>(indices.cbegin(), indices.cend());
+  viewport()->update();
+  emit selectionChanged();
+}
+#endif
 void GalleryView::collectSelection(std::function<void(QVector<MediaItem>)> done) {
   const bool all = all_;
   const QSet<int> selected = selected_, excluded = excluded_;
@@ -1454,7 +1475,7 @@ GalleryView::Visible GalleryView::visibleState(QVector<QPair<QString, bool>> *ke
       continue;
     }
     v.visible++;
-    const bool ok = pipeline_->has(cacheKey(*item, deviceSizeFor(index)));
+    const bool ok = item->thumbFailed || pipeline_->has(cacheKey(*item, deviceSizeFor(index)));
     if (ok) v.ready++;
     if (keys) keys->push_back({item->path(), ok});
   }
